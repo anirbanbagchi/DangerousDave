@@ -82,4 +82,4 @@ DangerousDave/
 
 ## 📜 License
 
-MIT License
+MIT License - See LICENSE file for details.
