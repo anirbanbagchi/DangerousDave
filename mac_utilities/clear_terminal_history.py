@@ -1,3 +1,10 @@
+"""
+Clears the terminal history files for Zsh and Bash shells on macOS.
+------------------------------------------------------------------------------
+This script allows users to view and permanently clear their terminal
+Author :  Anirban Bagchi
+"""
+
 import os
 import sys
 

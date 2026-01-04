@@ -1,3 +1,13 @@
+"""
+Python package installer script that reads a requirements file, removes version
+specifiers, and installs each package individually while logging the output. If
+an installation fails, it continues with the next package instead of stopping.
+This is particularly useful for macOS environments where certain packages may  
+fail to install due to compatibility issues.
+------------------------------------------------------------------------------
+Author :  Anirban Bagchi
+"""
+
 import subprocess
 import sys
 import os

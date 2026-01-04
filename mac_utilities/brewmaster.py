@@ -1,3 +1,9 @@
+"""
+Homebrew Upgrader with Enhanced Features
+--------------------------------
+Author :  Anirban Bagchi
+"""
+
 #!/usr/bin/env python3
 import argparse
 import subprocess

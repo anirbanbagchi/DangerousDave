@@ -1,3 +1,9 @@
+"""
+Python Package Manager (PakMan)
+--------------------------------
+Author :  Anirban Bagchi
+"""
+
 #!/usr/bin/env python3
 import sys
 import json

@@ -1,3 +1,9 @@
+"""
+All Python Versions Manager for macOS and Windows
+--------------------------------    
+Author :  Anirban Bagchi
+"""
+
 #!/usr/bin/env python3
 import os
 import sys

@@ -2,10 +2,9 @@
 # -*- coding: utf-8 -*-
 
 """
-Drive‑size explorer for Windows.
-
-Author :  <your name>
-Date   :  2025‑10‑27
+Drive Size Analyzer for macOS
+--------------------------------
+Author :  Anirban Bagchi
 """
 
 import os

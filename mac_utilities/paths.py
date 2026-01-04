@@ -1,3 +1,9 @@
+"""
+Path Inspector for macOS/Linux
+--------------------------------
+Author :  Anirban Bagchi
+"""
+
 #!/usr/bin/env python3
 """
 PATH Inspector (macOS/Linux)
