@@ -76,7 +76,7 @@ DangerousDave/
    cd projects/<project-name>
    ```
 
-3. Follow the instructions in that folder’s `README.md`.
+3. Follow the instructions in the relevant **Wiki**.
 
 ---
 
