@@ -1,3 +1,9 @@
+"""
+Package List Generator
+--------------------------------
+Author :  Anirban Bagchi
+"""
+
 import subprocess
 import sys
 import os

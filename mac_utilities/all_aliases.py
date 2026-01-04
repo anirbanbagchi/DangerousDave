@@ -1,3 +1,9 @@
+"""
+All Aliases Viewer for macOS
+---------------------------------
+Author :  Anirban Bagchi
+"""
+
 class C:
     RESET = "\033[0m"
     BOLD = "\033[1m"
