@@ -28,6 +28,7 @@ This repository may include (but is not limited to):
 - ☁️ **Cloud & DevOps experiments** (AWS, Databricks, CI/CD ideas)
 - 🤖 **AI & LLM prototypes** (prompting, agents, evaluations)
 - 🧪 **Proofs of concept** and exploratory code
+- 🧪 **VS Code Theme**, maybe experimental
 - 📝 **Notes & references** worth preserving
 
 Each project or experiment should live in its **own clearly named folder**.
@@ -39,9 +40,12 @@ Each project or experiment should live in its **own clearly named folder**.
 ```text
 DangerousDave/
 ├── README.md
-|   mac_utilities
+|   mac-utilities
 │   ├── utility_name_1.py
 │   ├── utility_name_2.py
+|   vs-code-theme
+│   ├── theme_1
+│   ├── theme_2
 ├── projects/
 │   ├── project-name-1/
 │   │   ├── README.md
