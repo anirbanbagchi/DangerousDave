@@ -1,4 +1,24 @@
+# macOS
 .DS_Store
+.AppleDouble
+.LSOverride
+
+# VS Code
+.vscode/*
+!.vscode/extensions.json
+
+# Node / npm
 node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
 # Removed so that we can publish VSIX files
 # *.vsix
+
+# Build / temp
+# dist/
+out/
+
+# Misc
+*.log
