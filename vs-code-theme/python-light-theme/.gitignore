@@ -17,7 +17,7 @@ yarn-error.log*
 # *.vsix
 
 # Build / temp
-dist/
+# dist/
 out/
 
 # Misc
