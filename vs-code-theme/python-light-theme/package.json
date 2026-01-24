@@ -3,7 +3,7 @@
   "displayName": "Python Light",
   "description": "A crisp light theme with deep purple chrome and high-contrast token colors for Python, SQL, Databricks, Jupyter, YAML, and JSON.",
   "version": "0.1.2",
-  "publisher": "AnirbanBagchi",
+  "publisher": "anirbanbagchi",
   "icon": "images/icon.png",
   "engines": {
     "vscode": "^1.85.0"

@@ -3,7 +3,7 @@
   "displayName": "System76",
   "description": "System76 theme optimized for Python, Databricks, C#, SQL, CI/CD, JSON, YAML, Docker, and data engineering. Includes Dark + Light variants.",
   "version": "0.1.0",
-  "publisher": "AnirbanBagchi",
+  "publisher": "anirbanbagchi",
   "icon": "images/icon.png",
   "engines": {
     "vscode": "^1.85.0"
