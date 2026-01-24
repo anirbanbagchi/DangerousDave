@@ -3,7 +3,7 @@
   "displayName": "CodeMash",
   "description": "A comfortable dual (light/dark) theme tuned for Python, SQL, C#, Databricks, Docker, CI/CD, JSON, YAML, and Jupyter work.",
   "version": "0.1.0",
-  "publisher": "AnirbanBagchi",
+  "publisher": "anirbanbagchi",
   "engines": {
     "vscode": "^1.85.0"
   },

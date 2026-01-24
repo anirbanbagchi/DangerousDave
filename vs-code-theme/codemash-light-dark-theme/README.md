@@ -94,9 +94,11 @@ code --install-extension codemash-0.1.0.vsix
 ## Repository structure
 
 ```
-codemash/
+codemash-light-dark-theme/
   images/
     icon.png
+    screenshot-dark.png
+    screenshot-light.png
   themes/
     CodeMash Dark-color-theme.json
     CodeMash Light-color-theme.json
