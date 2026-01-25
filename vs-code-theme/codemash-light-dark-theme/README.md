@@ -13,11 +13,13 @@ CodeMash is a **comfortable, low-fatigue** VS Code theme pair (Dark + Light) tun
 
 It uses a crisp, modern palette with clear accents and restrained contrast.
 
-### Light
-![CodeMash Light](./images/CodeMash-Light.png)
----
-### Dark
-![CodeMash Dark](./images/CodeMash-Dark.png)
+## Screenshots
+
+### CodeMash Dark
+![CodeMash Dark](https://raw.githubusercontent.com/anirbanbagchi/DangerousDave/main/vs-code-theme/codemash-light-dark-theme/images/CodeMash-Dark.png)
+
+### CodeMash Light
+![CodeMash Light](https://raw.githubusercontent.com/anirbanbagchi/DangerousDave/main/vs-code-theme/codemash-light-dark-theme/images/CodeMash-Light.png)
 
 ## Palette
 

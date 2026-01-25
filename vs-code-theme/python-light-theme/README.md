@@ -21,7 +21,7 @@ The theme uses the official Python color palette:
 - **Background (#F4F4F4)**: Clean, easy-on-the-eyes light background
 
 ## Screenshot
-![Python Light](images/python-light.png)
+![Python Light](https://raw.githubusercontent.com/anirbanbagchi/DangerousDave/main/vs-code-theme/python-light-theme/images/python-light.png)
 
 ## Install (Marketplace)
 1. Open VS Code
