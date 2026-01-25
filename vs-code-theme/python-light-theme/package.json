@@ -20,6 +20,13 @@
     "json",
     "cicd"
   ],
+  "files": [
+    "themes/**",
+    "images/**",
+    "README.md",
+    "LICENSE",
+    "package.json"
+  ],
   "contributes": {
     "themes": [
       {
