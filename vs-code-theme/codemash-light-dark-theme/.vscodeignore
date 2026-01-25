@@ -1,7 +1,0 @@
-# Keep the extension package lean
-.vscode/**
-**/*.psd
-**/*.ai
-**/*.sketch
-**/*.xcf
-**/*.zip
