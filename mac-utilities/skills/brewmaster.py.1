@@ -1,0 +1,171 @@
+.TH BREWMASTER.PY 1 "2026-03-28" "1.0.0" "User Commands"
+.SH NAME
+brewmaster.py \- a smarter Homebrew upgrader with version diffs, retries, and logging
+.SH SYNOPSIS
+.B python3 brewmaster.py
+[\fIOPTIONS\fR]
+.SH DESCRIPTION
+.B brewmaster.py
+is an enhanced Homebrew upgrade wrapper that shows version diffs, checks outdated
+formulae and casks in parallel, retries failed packages individually, skips pinned
+packages, and logs every run to
+.I ~/.brewmaster.log\c
+\&.
+.PP
+Running without flags performs an interactive upgrade: it updates Homebrew metadata,
+lists all outdated packages with version diffs, prompts for confirmation, then
+upgrades each package individually, retrying failures before reporting a summary.
+.SH OPTIONS
+.TP
+.BR \-y ", " \-\-yes
+Auto-approve all upgrades without an interactive prompt.
+.TP
+.BR \-\-greedy " (default)"
+Include auto-updating casks when checking for outdated packages
+.RB ( "brew outdated --cask --greedy" ).
+.TP
+.B \-\-no\-greedy
+Disable greedy cask checking. Only packages with a newer pinned version are shown.
+.TP
+.B \-\-check\-only
+Report outdated packages with version diffs but do not perform any upgrades.
+.TP
+.B \-\-dry\-run
+Print every command that would be executed without running any of them.
+Skips the confirmation prompt automatically.
+.TP
+.BI \-\-skip " PKG " [ PKG " ...]"
+Space-separated list of package names to exclude from the upgrade.
+.RS
+.EX
+python3 brewmaster.py --skip node python
+.EE
+.RE
+.TP
+.B \-\-formula\-only
+Upgrade formulae only; skip all casks.
+.TP
+.B \-\-cask\-only
+Upgrade casks only; skip all formulae.
+.TP
+.B \-\-notify
+Send a native macOS notification (via
+.BR osascript )
+when the run completes.
+.TP
+.B \-\-backup
+Before upgrading, dump the current Homebrew state to a timestamped Brewfile at
+.IR ~/.brewmaster_backup_YYYYMMDD_HHMMSS.Brewfile .
+Restore with:
+.RS
+.EX
+brew bundle install --file=~/.brewmaster_backup_<timestamp>.Brewfile
+.EE
+.RE
+.TP
+.BI \-\-retries " N"
+Number of retry attempts per package when an upgrade fails. Default is
+.BR 2 .
+.SH FEATURES
+.SS Version Diff Display
+Uses
+.B brew outdated --json=v2
+to show the installed and available version for each package:
+.RS
+.EX
+  \(bu ffmpeg  6.1.0 \(-> 7.1.0
+  \(bu node    20.11.0 \(-> 22.3.0
+.EE
+.RE
+.SS Parallel Outdated Checks
+Formula and cask outdated checks run concurrently in separate threads, reducing
+wait time on slow connections.
+.SS Per-Package Retries and Partial Failures
+Each package is upgraded individually. On failure it is retried up to
+.B --retries N
+times. Remaining packages continue regardless, and all failures are collected
+into a summary at the end.
+.SS Pin Awareness
+Reads
+.B brew list --pinned
+and automatically skips pinned formulae with a warning, e.g.:
+.RS
+.EX
+  📌 Skipping pinned: python@3.11
+.EE
+.RE
+.SS Upgrade Log
+Every run appends timestamped entries to
+.IR ~/.brewmaster.log :
+.RS
+.EX
+[2026-03-28 14:05:01] --- BrewMaster run started ---
+[2026-03-28 14:05:20] Upgraded formula: ffmpeg
+[2026-03-28 14:05:45] FAILED cask: some-app -- error details
+[2026-03-28 14:06:10] Run complete with 1 failure(s). Elapsed: 69.2s
+.EE
+.RE
+.SH EXAMPLES
+.TP
+Interactive upgrade (default):
+.EX
+python3 brewmaster.py
+.EE
+.TP
+Auto-approve, skip node and python, notify on completion:
+.EX
+python3 brewmaster.py -y --skip node python --notify
+.EE
+.TP
+Preview outdated packages with version diffs only:
+.EX
+python3 brewmaster.py --check-only
+.EE
+.TP
+Dry run — print all commands, execute nothing:
+.EX
+python3 brewmaster.py --dry-run
+.EE
+.TP
+Backup bundle, then upgrade formulae only:
+.EX
+python3 brewmaster.py --backup --formula-only
+.EE
+.TP
+Upgrade casks only, retry each failure up to 3 times:
+.EX
+python3 brewmaster.py --cask-only --retries 3
+.EE
+.TP
+Disable greedy cask detection, auto-approve:
+.EX
+python3 brewmaster.py --no-greedy -y
+.EE
+.SH FILES
+.TP
+.I ~/.brewmaster.log
+Timestamped log of all BrewMaster runs, upgrades, and failures.
+.TP
+.I ~/.brewmaster_backup_YYYYMMDD_HHMMSS.Brewfile
+Bundle snapshots created by
+.BR \-\-backup .
+.SH REQUIREMENTS
+Python 3.10 or later, Homebrew (
+.I https://brew.sh
+), macOS.
+.PP
+The
+.B \-\-notify
+flag requires
+.B osascript
+(available by default on macOS).
+.PP
+The
+.B \-\-backup
+flag requires the
+.B brew-bundle
+tap (included with Homebrew by default).
+.SH AUTHOR
+Anirban Bagchi
+.SH SEE ALSO
+.BR brew (1)
