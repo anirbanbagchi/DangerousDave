@@ -1,0 +1,213 @@
+.TH ALL_PYTHON.PY 1 "2026-03-28" "1.0.0" "User Commands"
+.SH NAME
+all_python.py \- discover and manage all Python installations on macOS or Windows
+.SH SYNOPSIS
+.B python3 all_python.py
+[\fIOPTIONS\fR]
+.SH DESCRIPTION
+.B all_python.py
+scans the system for every Python installation — Homebrew, pyenv, conda, system,
+and official installer — and presents them in a colour-coded table showing
+version, architecture, pip availability, vendor, aliases, and path.
+.PP
+Running without flags launches an interactive loop. Flags like
+.B \-\-list
+and
+.B \-\-switch
+provide non-interactive, scriptable equivalents of every action.
+.PP
+All per-binary queries (version, architecture, pip, site-packages) run in
+parallel via
+.B ThreadPoolExecutor
+so scans are fast even with many installations.
+.SH OPTIONS
+.TP
+.B \-\-list
+Print the installation table and exit without entering interactive mode.
+.TP
+.B \-\-json
+Output all installations as a JSON array and exit. Includes
+.IR version ", " vendor ", " arch ", " pip ", " commands ", " path ", " site_packages ", " is_default ", " protected .
+.TP
+.BI \-\-switch " N"
+Non-interactively switch the default Python to installation number
+.IR N
+(as shown in the
+.B #
+column). Prints the table first so the index is visible.
+.TP
+.BI \-\-remove " N"
+Non-interactively remove installation number
+.IR N .
+Subject to the same safety guardrails as the interactive
+.B R
+action.
+.TP
+.B \-\-verbose
+Add a
+.B SITE-PACKAGES
+column showing each installation's site-packages directory.
+Also enables site-packages collection when used with
+.BR \-\-json .
+.TP
+.B \-\-no\-color
+Disable ANSI color codes. Useful when piping output to other tools.
+.TP
+.BI \-\-sort " FIELD"
+Sort installations by
+.BR version " (default, descending),"
+.BR vendor ", or"
+.BR path .
+.SH INTERACTIVE MODE
+When launched without
+.BR \-\-list ", " \-\-json ", " \-\-switch ", or " \-\-remove ,
+the tool enters an interactive loop. After displaying the table it presents:
+.RS
+.TP
+.B S
+Switch Default — prompts for an installation number, then writes
+.B alias python=
+and
+.B alias python3=
+entries to
+.I ~/.zshrc
+(or
+.I ~/.bash_profile
+on bash). Backs up the file before writing. On Windows, updates the PowerShell profile.
+.TP
+.B R
+Remove Version — prompts for a number, runs safety checks, then removes the
+selected installation. See
+.B SAFETY GUARDRAILS
+below.
+.TP
+.B E " / Enter"
+Exit.
+.RE
+.SH TABLE COLUMNS
+.TP
+.B #
+Selection index for
+.B \-\-switch
+and
+.B \-\-remove .
+.TP
+.B VERSION
+Full
+.I x.y.z
+version. Green for 3.x, red for 2.x, yellow otherwise.
+.TP
+.B ARCH
+.BR "Apple Silicon" ", " "Intel 64" ", " Universal " (macOS);"
+.BR "64-bit" " or " "32-bit" " (Windows)."
+.TP
+.B PIP
+Whether
+.B pip
+is available for this installation.
+.TP
+.B VENDOR
+Source of the installation. See
+.BR "VENDOR DETECTION" .
+.TP
+.B ALIASES
+Binary names that resolve to this installation
+.RI ( python ", " python3 ", etc.)."
+.TP
+.B LOCATION
+Resolved real path. Annotated with
+.B (Current Default)
+or
+.B (Protected)
+where applicable.
+.TP
+.B SITE-PACKAGES
+.RI ( \-\-verbose " only)"
+Path to the site-packages directory.
+.SH VENDOR DETECTION
+.TS
+l l.
+macOS System	Path under /usr/bin or /System/Library
+Homebrew	Path contains homebrew or Cellar
+Official Installer	Path under /Library/Frameworks/Python.framework
+pyenv	Path contains .pyenv
+Conda	Path contains anaconda or miniconda
+Microsoft Store	Path contains WindowsApps (Windows; marked Protected)
+User/Other	Everything else
+.TE
+.SH SAFETY GUARDRAILS
+Removal is blocked with an error message if the target is:
+.RS
+.IP \(bu 2
+A Protected or System installation (macOS system Python, Microsoft Store)
+.IP \(bu 2
+The currently active default Python
+.IP \(bu 2
+The Python interpreter currently running the script
+.RE
+.PP
+On Windows, all removal requests are redirected to
+.B "Settings > Apps > Installed Apps"
+to avoid corrupting the Windows Registry.
+.SH EXAMPLES
+.TP
+Interactive mode:
+.EX
+python3 all_python.py
+.EE
+.TP
+List all installations non-interactively:
+.EX
+python3 all_python.py --list
+.EE
+.TP
+List with site-packages paths:
+.EX
+python3 all_python.py --list --verbose
+.EE
+.TP
+Output as JSON for scripting:
+.EX
+python3 all_python.py --json
+.EE
+.TP
+Switch default to installation #3:
+.EX
+python3 all_python.py --switch 3
+.EE
+.TP
+Remove installation #2:
+.EX
+python3 all_python.py --remove 2
+.EE
+.TP
+Sort by vendor, no color, pipe to grep:
+.EX
+python3 all_python.py --list --sort vendor --no-color | grep Conda
+.EE
+.SH FILES
+.TP
+.I ~/.zshrc " / " ~/.bash_profile
+Modified by
+.B Switch Default
+on macOS. Backed up before writing as
+.IR ~/.zshrc.backup-YYYYMMDD-HHMMSS .
+.TP
+.I ~/Documents/WindowsPowerShell/Microsoft.PowerShell_profile.ps1
+Modified by
+.B Switch Default
+on Windows. Backed up before writing.
+.SH REQUIREMENTS
+Python 3.10 or later, macOS or Windows.
+.PP
+.B lipo
+is required for architecture detection on macOS (included with Xcode Command Line Tools).
+.PP
+.B brew
+is required to uninstall Homebrew-managed installations (optional — manual path is printed otherwise).
+.SH AUTHOR
+Anirban Bagchi
+.SH SEE ALSO
+.BR python3 (1),
+.BR brew (1),
+.BR pyenv (1)

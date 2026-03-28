@@ -1,0 +1,197 @@
+.TH PAKMAN.PY 1 "2026-03-28" "1.0.0" "User Commands"
+.SH NAME
+PakMan.py \- a robust Python package updater with per-package retries and logging
+.SH SYNOPSIS
+.B python3 PakMan.py
+[\fIOPTIONS\fR]
+.SH DESCRIPTION
+.B PakMan.py
+wraps
+.B pip
+to upgrade outdated Python packages with per-package retries, a failure
+summary, optional freeze export, and a timestamped log at
+.IR ~/.pakman.log .
+.PP
+Running without flags performs an interactive upgrade: it checks for outdated
+packages, shows a table with current and latest versions, prompts for
+confirmation, then upgrades each package individually — retrying failures before
+reporting a summary.
+.PP
+All upgrades run per-package rather than in a single batch, so a failure in one
+package does not abort the others.
+.SH OPTIONS
+.TP
+.BR \-y ", " \-\-yes
+Auto-approve all upgrades without an interactive prompt.
+.TP
+.B \-\-check\-only
+List outdated packages with version info and exit without upgrading.
+.TP
+.B \-\-dry\-run
+Print every command that would be executed without running any of them.
+Skips the confirmation prompt automatically.
+.TP
+.BI \-\-exclude " PKG " [ PKG " ...]"
+Space-separated list of package names to skip.
+.RS
+.EX
+python3 PakMan.py --exclude pip setuptools
+.EE
+.RE
+.TP
+.BI \-\-only " PKG " [ PKG " ...]"
+Upgrade only the listed packages. Packages not in the outdated list are ignored.
+.RS
+.EX
+python3 PakMan.py --only requests boto3
+.EE
+.RE
+.TP
+.B \-\-upgrade\-pip
+Upgrade
+.B pip
+itself (via
+.BR "pip install --upgrade pip" )
+before upgrading any other packages.
+.TP
+.B \-\-pre
+Pass
+.B \-\-pre
+to pip when upgrading, allowing installation of pre-release versions.
+.TP
+.BI \-\-export " FILE"
+After all upgrades complete, run
+.B pip freeze
+and write the output to
+.IR FILE .
+.RS
+.EX
+python3 PakMan.py -y --export requirements.txt
+.EE
+.RE
+.TP
+.B \-\-notify
+Send a native macOS notification (via
+.BR osascript )
+when the run completes.
+.TP
+.B \-\-json
+Print the outdated package list as a JSON array and exit. No upgrades are
+performed. Each entry contains
+.IR name ", " version ", " latest_version ", " latest_filetype .
+.TP
+.BI \-\-retries " N"
+Number of retry attempts per package when an upgrade fails. Default is
+.BR 2 .
+.SH FEATURES
+.SS Per-Package Retries and Partial Failures
+Each package is upgraded with its own
+.B pip install --upgrade
+call. On failure it retries up to
+.B --retries N
+times before being marked failed. All other packages continue regardless.
+A summary is printed at the end:
+.RS
+.EX
+\(bu some-package: error details here
+.EE
+.RE
+.SS Outdated Table
+Displays package name, installed version, latest available version, and
+release type (wheel, sdist):
+.RS
+.EX
+Package                        Current         Latest          Type
+----------------------------------------------------------------------
+requests                       2.28.0          2.31.0          wheel
+.EE
+.RE
+.SS Virtualenv Warning
+Detects whether a virtualenv is active. If not, prints a warning before
+touching any global packages.
+.SS pip Self-Upgrade
+.B \-\-upgrade\-pip
+runs
+.B pip install --upgrade pip
+before any other upgrades, ensuring the latest resolver is used.
+.SS Freeze Export
+.B \-\-export FILE
+runs
+.B pip freeze
+after all upgrades and writes the output to
+.IR FILE ,
+keeping
+.I requirements.txt
+in sync automatically.
+.SS Upgrade Log
+Every run appends timestamped entries to
+.IR ~/.pakman.log :
+.RS
+.EX
+[2026-03-28 14:05:01] --- PakMan run started ---
+[2026-03-28 14:05:08] Upgraded: requests 2.28.0 -> 2.31.0
+[2026-03-28 14:05:12] FAILED: some-pkg -- error details
+[2026-03-28 14:05:13] Run complete with 1 failure(s). Elapsed: 12.4s
+.EE
+.RE
+.SH EXAMPLES
+.TP
+Standard interactive upgrade:
+.EX
+python3 PakMan.py
+.EE
+.TP
+Auto-approve, skip pip and setuptools, notify on completion:
+.EX
+python3 PakMan.py -y --exclude pip setuptools --notify
+.EE
+.TP
+Preview outdated packages only:
+.EX
+python3 PakMan.py --check-only
+.EE
+.TP
+Upgrade only specific packages:
+.EX
+python3 PakMan.py --only requests boto3 -y
+.EE
+.TP
+Upgrade pip first, then everything, export freeze when done:
+.EX
+python3 PakMan.py --upgrade-pip -y --export requirements.txt
+.EE
+.TP
+Include pre-release versions:
+.EX
+python3 PakMan.py --pre -y
+.EE
+.TP
+Output outdated list as JSON for scripting:
+.EX
+python3 PakMan.py --json
+.EE
+.TP
+Retry each failure up to 3 times:
+.EX
+python3 PakMan.py --retries 3 -y
+.EE
+.SH FILES
+.TP
+.I ~/.pakman.log
+Timestamped log of all PakMan runs, upgrades, and failures.
+.SH REQUIREMENTS
+Python 3.10 or later.
+.B pip
+must be available for the active interpreter
+.RB ( "python \-m pip" ).
+.PP
+The
+.B \-\-notify
+flag requires
+.B osascript
+(available by default on macOS).
+.SH AUTHOR
+Anirban Bagchi
+.SH SEE ALSO
+.BR pip (1),
+.BR python3 (1)
