@@ -6,13 +6,8 @@
 	objectVersion = 77;
 	objects = {
 
-/* Begin PBXBuildFile section */
-		99AC6A872F7F2BF500000096 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 99AC6A862F7F2BF500000096 /* SettingsView.swift */; };
-/* End PBXBuildFile section */
-
 /* Begin PBXFileReference section */
 		992A17D62F7EE51B0003EDCE /* SystemStatus.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = SystemStatus.app; sourceTree = BUILT_PRODUCTS_DIR; };
-		99AC6A862F7F2BF500000096 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -39,7 +34,6 @@
 			children = (
 				992A17D82F7EE51B0003EDCE /* SystemStatus */,
 				992A17D72F7EE51B0003EDCE /* Products */,
-				99AC6A862F7F2BF500000096 /* SettingsView.swift */,
 			);
 			sourceTree = "<group>";
 		};
@@ -125,7 +119,6 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				99AC6A872F7F2BF500000096 /* SettingsView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

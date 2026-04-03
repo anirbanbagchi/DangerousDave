@@ -46,7 +46,7 @@ struct AboutView: View {
             Divider()
 
             // Description
-            Text("A lightweight macOS menu bar app that displays live CPU, Memory, Network, Disk, and Battery statistics — no Dock icon, no clutter.")
+            Text("A lightweight macOS menu bar app that monitors CPU, GPU, Memory, Network, Disk, Battery, and system health — all from your menu bar, with no Dock icon.")
                 .font(.body)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
