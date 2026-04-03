@@ -32,6 +32,12 @@ final class BatteryMonitor {
                 stats.timeRemaining = tte
             }
 
+            // Instantaneous power = |current (mA)| × voltage (mV) / 1,000,000
+            if let currentMA = desc[kIOPSCurrentKey] as? Int,
+               let voltageMV = desc[kIOPSVoltageKey] as? Int {
+                stats.powerWatts = abs(Double(currentMA) * Double(voltageMV)) / 1_000_000.0
+            }
+
             // Cycle count + health from AppleSmartBattery IORegistry entry
             let svc = IOServiceGetMatchingService(kIOMainPortDefault,
                                                   IOServiceMatching("AppleSmartBattery"))
