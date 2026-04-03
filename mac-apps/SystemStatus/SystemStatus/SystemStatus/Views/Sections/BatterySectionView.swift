@@ -50,6 +50,10 @@ struct BatterySectionView: View {
                               value: timeLabel)
                     MetricRow(label: "Cycles",  value: "\(stats.cycleCount)")
                     MetricRow(label: "Health",  value: stats.healthCondition)
+                    if stats.powerWatts > 0 {
+                        MetricRow(label: "Power",
+                                  value: String(format: "%.1f W", stats.powerWatts))
+                    }
                 }
             }
         }
@@ -57,7 +61,7 @@ struct BatterySectionView: View {
     }
 
     private var copyText: String {
-        """
+        var text = """
         Battery
         Charge:    \(stats.percentage)%
         Status:    \(statusLabel)
@@ -65,5 +69,9 @@ struct BatterySectionView: View {
         Cycles:    \(stats.cycleCount)
         Health:    \(stats.healthCondition)
         """
+        if stats.powerWatts > 0 {
+            text += "\nPower:     \(String(format: "%.1f W", stats.powerWatts))"
+        }
+        return text
     }
 }

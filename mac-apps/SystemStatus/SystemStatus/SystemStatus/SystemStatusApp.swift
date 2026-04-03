@@ -27,25 +27,45 @@ struct SystemStatusApp: App {
         Settings {
             SettingsView()
         }
+
+        Window("About SystemStatus", id: "about") {
+            AboutView()
+        }
+        .windowStyle(.hiddenTitleBar)
+        .windowResizability(.contentSize)
     }
 }
 
-// Private label view for the menu bar status item.
+// MARK: - MenuBarLabel
+
 // Reads UserDefaults directly inside body — no observers needed.
-// The view re-renders on every timer tick (as cpuStats / memoryStats change),
-// so the mode is always current within one refresh cycle.
+// Re-renders on every timer tick so the mode is always current.
 private struct MenuBarLabel: View {
     let monitor: SystemMonitor
 
     private var memPct: Int {
         guard monitor.memoryStats.physicalMemory > 0 else { return 0 }
-        return Int(Double(monitor.memoryStats.memoryUsed) / Double(monitor.memoryStats.physicalMemory) * 100)
+        return Int(Double(monitor.memoryStats.memoryUsed) /
+                   Double(monitor.memoryStats.physicalMemory) * 100)
+    }
+
+    /// Colour reflects the highest load across CPU and memory.
+    private var pressureColor: Color {
+        let maxLoad = max(Int(monitor.cpuStats.totalUsedPercent), memPct)
+        switch maxLoad {
+        case ..<50: return .green
+        case ..<80: return .orange
+        default:    return .red
+        }
     }
 
     var body: some View {
-        // Read fresh on every render — no stale cached value possible.
         let mode = UserDefaults.standard.string(forKey: "menuBarLabel") ?? "cpu"
-        HStack(spacing: 3) {
+        HStack(spacing: 4) {
+            // Colour-coded status dot
+            Circle()
+                .fill(pressureColor)
+                .frame(width: 6, height: 6)
             Image(systemName: "cpu")
             if mode == "cpu" || mode == "both" {
                 Text(String(format: "%d%%", Int(monitor.cpuStats.totalUsedPercent)))

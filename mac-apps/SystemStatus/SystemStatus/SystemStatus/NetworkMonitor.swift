@@ -9,13 +9,6 @@
 import Foundation
 import Darwin
 
-struct NetworkStats {
-    var uploadBytesPerSec: Double   = 0
-    var downloadBytesPerSec: Double = 0
-    var totalBytesSent: UInt64      = 0
-    var totalBytesReceived: UInt64  = 0
-}
-
 final class NetworkMonitor {
     private var previousSent: UInt64 = 0
     private var previousRecv: UInt64 = 0
