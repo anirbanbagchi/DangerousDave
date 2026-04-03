@@ -94,7 +94,7 @@ struct CPUSectionView: View {
                         }
                         .contentShape(Rectangle())
                         .contextMenu {
-                            Button("Force Quit "\(proc.name)"", role: .destructive) {
+                            Button("Force Quit \"\(proc.name)\"", role: .destructive) {
                                 processToKill = proc
                             }
                         }
