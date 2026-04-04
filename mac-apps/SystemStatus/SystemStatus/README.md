@@ -30,7 +30,15 @@ A lightweight macOS menu bar app that displays live system stats at a glance —
 
 ## Screenshot
 
-> *(Add a screenshot here once the app is running)*
+![Usage](/mac-apps/SystemStatus/SystemStatus/assets/AppScreenshots/Usage.png)
+---
+![I/O](/mac-apps/SystemStatus/SystemStatus/assets/AppScreenshots/IO.png)
+---
+![System](/mac-apps/SystemStatus/SystemStatus/assets/AppScreenshots/System.png)
+---
+![Settings](/mac-apps/SystemStatus/SystemStatus/assets/AppScreenshots/Settings_1.png)
+---
+![Settings_Contd](/mac-apps/SystemStatus/SystemStatus/assets/AppScreenshots/Settings_2.png)
 
 ## Requirements
 
@@ -44,8 +52,8 @@ A lightweight macOS menu bar app that displays live system stats at a glance —
 
 1. Clone the repo:
    ```bash
-   git clone https://github.com/anirbanbagchi/SystemStatus.git
-   cd SystemStatus
+   git clone https://github.com/anirbanbagchi/DangerousDave.git
+   cd mac-apps/SystemStatus/SystemStatus
    ```
 2. Open the project in Xcode:
    ```bash
