@@ -17,11 +17,11 @@ python3 brewmaster.py [OPTIONS]
 | `--check-only` | `false` | Report outdated packages without upgrading |
 | `--dry-run` | `false` | Simulate all commands without executing them |
 | `--skip PKG [PKG ...]` | — | Skip one or more named packages |
-| `--formula-only` | `false` | Only upgrade formulae, ignore casks |
-| `--cask-only` | `false` | Only upgrade casks, ignore formulae |
+| `--formula-only` | `false` | Only upgrade formulae, ignore casks (mutually exclusive with `--cask-only`) |
+| `--cask-only` | `false` | Only upgrade casks, ignore formulae (mutually exclusive with `--formula-only`) |
 | `--notify` | `false` | Send a macOS notification when the run finishes |
 | `--backup` | `false` | Snapshot current state to a `.Brewfile` before upgrading |
-| `--retries N` | `2` | Number of retry attempts per package on failure |
+| `--retries N` | `2` | Number of retry attempts per package on failure (min: 1) |
 
 ## Examples
 
@@ -58,7 +58,7 @@ Uses `brew outdated --json=v2` to show installed vs. available version for every
 ```
 
 ### Parallel Outdated Checks
-Formula and cask outdated checks run concurrently via threads, reducing wait time.
+Formula and cask outdated checks run concurrently via `ThreadPoolExecutor`. Exceptions in either worker are surfaced immediately rather than silently swallowed.
 
 ### Per-Package Retries
 Each package is upgraded individually. On failure it retries up to `--retries N` times before being marked failed. Other packages continue regardless.
@@ -71,7 +71,7 @@ Failed packages are collected and displayed in a summary at the end rather than 
 ```
 
 ### Pin Awareness
-Reads `brew list --pinned` and automatically skips pinned formulae with a warning:
+Reads `brew list --pinned` and automatically skips pinned formulae with a warning. If the pinned-package query itself fails, a warning is printed and the run continues:
 ```
   📌 Skipping pinned: python@3.11
 ```
@@ -81,10 +81,12 @@ Reads `brew list --pinned` and automatically skips pinned formulae with a warnin
 ```
 ~/.brewmaster_backup_YYYYMMDD_HHMMSS.Brewfile
 ```
+If the dump command fails (e.g. the bundle tap is missing), an error is printed and the run aborts the backup step cleanly rather than writing an empty file.
+
 Restore with: `brew bundle install --file=~/.brewmaster_backup_<timestamp>.Brewfile`
 
 ### Upgrade Log
-Every run appends timestamped entries to `~/.brewmaster.log`:
+Every run appends timestamped entries to `~/.brewmaster.log` via Python's `logging` module:
 ```
 [2026-03-28 14:05:01] --- BrewMaster run started ---
 [2026-03-28 14:05:20] Upgraded formula: ffmpeg
@@ -93,7 +95,7 @@ Every run appends timestamped entries to `~/.brewmaster.log`:
 ```
 
 ### macOS Notifications
-`--notify` sends a native notification on completion via `osascript`. Requires macOS.
+`--notify` sends a native notification on completion via `osascript`. Special characters in package names and error messages are escaped to prevent AppleScript injection. Requires macOS.
 
 ## Requirements
 

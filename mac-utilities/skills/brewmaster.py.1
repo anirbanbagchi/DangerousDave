@@ -1,4 +1,4 @@
-.TH BREWMASTER.PY 1 "2026-03-28" "1.0.0" "User Commands"
+.TH BREWMASTER.PY 1 "2026-04-27" "1.1.0" "User Commands"
 .SH NAME
 brewmaster.py \- a smarter Homebrew upgrader with version diffs, retries, and logging
 .SH SYNOPSIS
@@ -44,18 +44,25 @@ python3 brewmaster.py --skip node python
 .TP
 .B \-\-formula\-only
 Upgrade formulae only; skip all casks.
+Mutually exclusive with
+.BR \-\-cask\-only .
 .TP
 .B \-\-cask\-only
 Upgrade casks only; skip all formulae.
+Mutually exclusive with
+.BR \-\-formula\-only .
 .TP
 .B \-\-notify
 Send a native macOS notification (via
 .BR osascript )
-when the run completes.
+when the run completes. Special characters in titles and messages are escaped
+to prevent AppleScript injection.
 .TP
 .B \-\-backup
 Before upgrading, dump the current Homebrew state to a timestamped Brewfile at
 .IR ~/.brewmaster_backup_YYYYMMDD_HHMMSS.Brewfile .
+If the dump command fails, a warning is printed and the backup step is skipped
+cleanly without writing any file.
 Restore with:
 .RS
 .EX
@@ -66,6 +73,8 @@ brew bundle install --file=~/.brewmaster_backup_<timestamp>.Brewfile
 .BI \-\-retries " N"
 Number of retry attempts per package when an upgrade fails. Default is
 .BR 2 .
+Minimum value is
+.BR 1 .
 .SH FEATURES
 .SS Version Diff Display
 Uses
@@ -78,8 +87,10 @@ to show the installed and available version for each package:
 .EE
 .RE
 .SS Parallel Outdated Checks
-Formula and cask outdated checks run concurrently in separate threads, reducing
-wait time on slow connections.
+Formula and cask outdated checks run concurrently via
+.BR ThreadPoolExecutor ,
+reducing wait time on slow connections. Exceptions raised in either worker
+thread are re-raised in the main thread immediately rather than silently lost.
 .SS Per-Package Retries and Partial Failures
 Each package is upgraded individually. On failure it is retried up to
 .B --retries N
@@ -88,15 +99,20 @@ into a summary at the end.
 .SS Pin Awareness
 Reads
 .B brew list --pinned
-and automatically skips pinned formulae with a warning, e.g.:
+and automatically skips pinned formulae with a warning. If the pinned-package
+query itself fails, a warning is printed and the run continues without pin
+protection rather than aborting.
 .RS
 .EX
-  📌 Skipping pinned: python@3.11
+  \[u1F4CC] Skipping pinned: python@3.11
 .EE
 .RE
 .SS Upgrade Log
 Every run appends timestamped entries to
-.IR ~/.brewmaster.log :
+.IR ~/.brewmaster.log
+via Python's
+.B logging
+module:
 .RS
 .EX
 [2026-03-28 14:05:01] --- BrewMaster run started ---

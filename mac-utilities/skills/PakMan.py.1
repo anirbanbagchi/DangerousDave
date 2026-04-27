@@ -1,4 +1,4 @@
-.TH PAKMAN.PY 1 "2026-03-28" "1.0.0" "User Commands"
+.TH PAKMAN.PY 1 "2026-04-27" "1.1.0" "User Commands"
 .SH NAME
 PakMan.py \- a robust Python package updater with per-package retries and logging
 .SH SYNOPSIS
@@ -32,7 +32,11 @@ Print every command that would be executed without running any of them.
 Skips the confirmation prompt automatically.
 .TP
 .BI \-\-exclude " PKG " [ PKG " ...]"
-Space-separated list of package names to skip.
+Space-separated list of package names to skip. Matching is case-insensitive,
+so
+.B \-\-exclude pillow
+matches
+.BR Pillow .
 .RS
 .EX
 python3 PakMan.py --exclude pip setuptools
@@ -40,7 +44,12 @@ python3 PakMan.py --exclude pip setuptools
 .RE
 .TP
 .BI \-\-only " PKG " [ PKG " ...]"
-Upgrade only the listed packages. Packages not in the outdated list are ignored.
+Upgrade only the listed packages. Matching is case-insensitive. Packages not
+in the outdated list are silently ignored. Specifying the same package in both
+.B \-\-only
+and
+.B \-\-exclude
+is an error.
 .RS
 .EX
 python3 PakMan.py --only requests boto3
@@ -64,6 +73,7 @@ After all upgrades complete, run
 .B pip freeze
 and write the output to
 .IR FILE .
+If the freeze command fails, a warning is printed and the file is not written.
 .RS
 .EX
 python3 PakMan.py -y --export requirements.txt
@@ -73,7 +83,8 @@ python3 PakMan.py -y --export requirements.txt
 .B \-\-notify
 Send a native macOS notification (via
 .BR osascript )
-when the run completes.
+when the run completes. Special characters in package names and error messages
+are escaped to prevent AppleScript injection.
 .TP
 .B \-\-json
 Print the outdated package list as a JSON array and exit. No upgrades are
@@ -83,6 +94,8 @@ performed. Each entry contains
 .BI \-\-retries " N"
 Number of retry attempts per package when an upgrade fails. Default is
 .BR 2 .
+Minimum value is
+.BR 1 .
 .SH FEATURES
 .SS Per-Package Retries and Partial Failures
 Each package is upgraded with its own
@@ -98,14 +111,14 @@ A summary is printed at the end:
 .RE
 .SS Outdated Table
 Displays package name, installed version, latest available version, and
-release type (wheel, sdist):
-.RS
-.EX
-Package                        Current         Latest          Type
-----------------------------------------------------------------------
-requests                       2.28.0          2.31.0          wheel
-.EE
-.RE
+release type (wheel, sdist). Column widths are derived from the actual data,
+so long package names are never truncated.
+.SS Case-Insensitive Package Filtering
+.B \-\-only
+and
+.B \-\-exclude
+match package names case-insensitively against the canonical names returned
+by pip. Specifying the same name in both flags is rejected at parse time.
 .SS Virtualenv Warning
 Detects whether a virtualenv is active. If not, prints a warning before
 touching any global packages.
@@ -119,13 +132,15 @@ before any other upgrades, ensuring the latest resolver is used.
 runs
 .B pip freeze
 after all upgrades and writes the output to
-.IR FILE ,
-keeping
-.I requirements.txt
-in sync automatically.
+.IR FILE .
+If the freeze command exits non-zero, a warning is printed and no file is
+written.
 .SS Upgrade Log
 Every run appends timestamped entries to
-.IR ~/.pakman.log :
+.IR ~/.pakman.log
+via Python's
+.B logging
+module:
 .RS
 .EX
 [2026-03-28 14:05:01] --- PakMan run started ---

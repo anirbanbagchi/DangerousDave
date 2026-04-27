@@ -12,7 +12,8 @@ import shutil
 import json
 import time
 import datetime
-import threading
+import logging
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 # ANSI Colors
@@ -25,32 +26,27 @@ RESET = "\033[0m"
 
 LOG_PATH = Path.home() / ".brewmaster.log"
 
+_file_handler = logging.FileHandler(LOG_PATH)
+_file_handler.setFormatter(logging.Formatter("[%(asctime)s] %(message)s", datefmt="%Y-%m-%d %H:%M:%S"))
+_logger = logging.getLogger("brewmaster")
+_logger.addHandler(_file_handler)
+_logger.setLevel(logging.DEBUG)
 
-def format_text(text: str, color: str = RESET, bold: bool = False) -> str:
-    """Format text with ANSI colors."""
+
+def format_text(text: str, color: str = "", bold: bool = False) -> str:
     code = color
     if bold:
         code += BOLD
+    if not code:
+        return text
     return f"{code}{text}{RESET}"
 
 
 def log(message: str):
-    """Append a timestamped message to the log file."""
-    timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    with open(LOG_PATH, "a") as f:
-        f.write(f"[{timestamp}] {message}\n")
+    _logger.info(message)
 
 
 def run_command(cmd: list[str], stream: bool = False, check: bool = True, dry_run: bool = False) -> subprocess.CompletedProcess:
-    """
-    Run a command.
-
-    Args:
-        cmd: The command to run.
-        stream: If True, print output in real-time. If False, capture it.
-        check: If True, exit on failure.
-        dry_run: If True, print the command but don't execute (returns dummy process).
-    """
     cmd_str = ' '.join(cmd)
 
     if dry_run:
@@ -83,10 +79,7 @@ def run_command(cmd: list[str], stream: bool = False, check: bool = True, dry_ru
 
 
 def run_package(cmd_prefix: list[str], pkg: str, dry_run: bool, max_retries: int = 2) -> tuple[str, bool, str]:
-    """
-    Attempt to upgrade a single package, with retries.
-    Returns (pkg_name, success, error_message).
-    """
+    """Attempt to upgrade a single package with retries. Returns (pkg_name, success, error_message)."""
     cmd = cmd_prefix + [pkg]
     cmd_str = ' '.join(cmd)
 
@@ -94,7 +87,7 @@ def run_package(cmd_prefix: list[str], pkg: str, dry_run: bool, max_retries: int
         print(f"{format_text('[DRY-RUN]', YELLOW)} Would execute: {cmd_str}")
         return (pkg, True, "")
 
-    p = subprocess.CompletedProcess(cmd, 1)
+    p = None
     for attempt in range(1, max_retries + 1):
         suffix = f" (attempt {attempt}/{max_retries})" if attempt > 1 else ""
         print(f"{format_text('Running:', BLUE)} {cmd_str}{suffix}")
@@ -104,28 +97,26 @@ def run_package(cmd_prefix: list[str], pkg: str, dry_run: bool, max_retries: int
         if attempt < max_retries:
             print(format_text("  ⚠️  Retrying...", YELLOW))
 
-    error = p.stderr.strip() or p.stdout.strip()
+    error = (p.stderr.strip() or p.stdout.strip()) if p else "no attempts made"
     return (pkg, False, error)
 
 
 def check_brew_installed():
-    """Verify Homebrew is installed."""
     if not shutil.which("brew"):
         print(format_text("❌ 'brew' not found. Install Homebrew first: https://brew.sh/", RED))
         sys.exit(1)
 
 
 def get_pinned() -> set[str]:
-    """Return set of pinned formula names."""
     p = subprocess.run(["brew", "list", "--pinned"], text=True, capture_output=True)
+    if p.returncode != 0:
+        print(format_text("⚠️  Could not fetch pinned packages; proceeding without pin protection.", YELLOW))
+        return set()
     return {line.strip() for line in p.stdout.splitlines() if line.strip()}
 
 
 def get_outdated_json(greedy: bool) -> tuple[list[dict], list[dict]]:
-    """
-    Fetch outdated formulae and casks in parallel using brew's JSON output.
-    Each item is a dict with name, installed_versions, current_version.
-    """
+    """Fetch outdated formulae and casks in parallel using brew's JSON output."""
     formulae: list[dict] = []
     casks: list[dict] = []
 
@@ -145,18 +136,18 @@ def get_outdated_json(greedy: bool) -> tuple[list[dict], list[dict]]:
         if p.returncode == 0 and p.stdout.strip():
             casks.extend(json.loads(p.stdout).get("casks", []))
 
-    t1 = threading.Thread(target=fetch_formulae)
-    t2 = threading.Thread(target=fetch_casks)
-    t1.start()
-    t2.start()
-    t1.join()
-    t2.join()
+    with ThreadPoolExecutor(max_workers=2) as ex:
+        f_future = ex.submit(fetch_formulae)
+        c_future = ex.submit(fetch_casks)
+
+    # Re-raise any exceptions that occurred in worker threads
+    f_future.result()
+    c_future.result()
 
     return formulae, casks
 
 
 def format_package_info(pkg: dict) -> str:
-    """Format a package entry as 'name  old → new'."""
     name = pkg.get("name", "?")
     installed = pkg.get("installed_versions", [])
     current = pkg.get("current_version", "?")
@@ -166,7 +157,9 @@ def format_package_info(pkg: dict) -> str:
 
 def send_notification(title: str, message: str):
     """Send a macOS notification via osascript."""
-    script = f'display notification "{message}" with title "{title}"'
+    title_safe = title.replace("\\", "\\\\").replace('"', '\\"')
+    message_safe = message.replace("\\", "\\\\").replace('"', '\\"')
+    script = f'display notification "{message_safe}" with title "{title_safe}"'
     subprocess.run(["osascript", "-e", script], capture_output=True)
 
 
@@ -181,6 +174,9 @@ def backup_bundle(dry_run: bool):
         ["brew", "bundle", "dump", "--file=/dev/stdout"],
         text=True, capture_output=True
     )
+    if result.returncode != 0:
+        print(format_text(f"  ⚠️  Backup failed: {result.stderr.strip() or 'unknown error'}", RED))
+        return
     backup_path.write_text(result.stdout)
     print(format_text(f"   Saved to {backup_path}", GREEN))
     log(f"Backup saved to {backup_path}")
@@ -212,9 +208,15 @@ def main():
     parser.add_argument("--cask-only", action="store_true", help="Only upgrade casks, skip formulae")
     parser.add_argument("--notify", action="store_true", help="Send a macOS notification when done")
     parser.add_argument("--backup", action="store_true", help="Backup Homebrew bundle before upgrading")
-    parser.add_argument("--retries", type=int, default=2, metavar="N", help="Retries per package on failure [Default: 2]")
+    parser.add_argument("--retries", type=int, default=2, metavar="N", help="Retries per package on failure [Default: 2, min: 1]")
 
     args = parser.parse_args()
+
+    if args.formula_only and args.cask_only:
+        parser.error("--formula-only and --cask-only are mutually exclusive")
+
+    if args.retries < 1:
+        parser.error("--retries must be at least 1")
 
     start_time = time.time()
     log("--- BrewMaster run started ---")
@@ -226,28 +228,23 @@ def main():
     if args.backup:
         backup_bundle(args.dry_run)
 
-    # Update Homebrew metadata
     print(f"\n{format_text('🔄 Updating Homebrew... (brew update)', BLUE)}")
     run_command(["brew", "update"], stream=True, dry_run=args.dry_run)
 
-    # Fetch outdated packages in parallel with version info
     print(f"\n{format_text('🔍 Checking outdated packages...', BLUE)}")
     formulae_raw, casks_raw = get_outdated_json(args.greedy)
 
-    # Apply --formula-only / --cask-only filters
     if args.formula_only:
         casks_raw = []
     if args.cask_only:
         formulae_raw = []
 
-    # Skip pinned and --skip packages
     pinned = get_pinned()
     skip_set = set(args.skip)
 
     formulae, skipped_f_flag, skipped_f_pinned = filter_packages(formulae_raw, skip_set, pinned)
     casks, skipped_c_flag, skipped_c_pinned = filter_packages(casks_raw, skip_set, pinned)
 
-    # Summary
     print(f"\n{format_text('📦 Summary:', BLUE, bold=True)}")
 
     for name in skipped_f_pinned + skipped_c_pinned:
@@ -280,7 +277,6 @@ def main():
         log(f"Check-only run: {len(formulae)} formulae + {len(casks)} casks outdated.")
         return
 
-    # Confirmation prompt
     if not args.yes:
         if args.dry_run:
             print(f"\n{format_text('[DRY-RUN]', YELLOW)} Skipping confirmation prompt.")
@@ -292,7 +288,6 @@ def main():
 
     failures: list[tuple[str, str, str]] = []
 
-    # Upgrade formulae one-by-one with retries
     if formulae:
         print(f"\n{format_text('⬆️  Upgrading formulae...', BLUE)}")
         for pkg in formulae:
@@ -305,7 +300,6 @@ def main():
                 print(format_text(f"  ❌ Failed: {name} — {error}", RED))
                 log(f"FAILED formula: {name} — {error}")
 
-    # Upgrade casks one-by-one with retries
     if casks:
         print(f"\n{format_text('⬆️  Upgrading casks...', BLUE)}")
         cask_prefix = ["brew", "upgrade", "--cask"]
@@ -321,7 +315,6 @@ def main():
                 print(format_text(f"  ❌ Failed: {name} — {error}", RED))
                 log(f"FAILED cask: {name} — {error}")
 
-    # Cleanup
     print(f"\n{format_text('🧹 Cleaning up...', BLUE)}")
     run_command(["brew", "cleanup"], stream=True, dry_run=args.dry_run)
 
