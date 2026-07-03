@@ -1,6 +1,6 @@
-.TH PAKMAN.PY 1 "2026-04-27" "1.1.0" "User Commands"
+.TH PAKMAN.PY 1 "2026-07-03" "2.0.0" "User Commands"
 .SH NAME
-PakMan.py \- a robust Python package updater with per-package retries and logging
+PakMan.py \- a robust Python package updater with batch upgrades, rollback, and logging
 .SH SYNOPSIS
 .B python3 PakMan.py
 [\fIOPTIONS\fR]
@@ -8,147 +8,182 @@ PakMan.py \- a robust Python package updater with per-package retries and loggin
 .B PakMan.py
 wraps
 .B pip
-to upgrade outdated Python packages with per-package retries, a failure
-summary, optional freeze export, and a timestamped log at
+to upgrade outdated Python packages. It tries a single batch upgrade first
+(one resolver run), falling back to per-package upgrades with retries and
+timeouts to isolate failures. Before upgrading it writes a rollback snapshot;
+after upgrading it verifies the dependency graph with
+.BR "pip check" .
+Every run is logged to
 .IR ~/.pakman.log .
 .PP
-Running without flags performs an interactive upgrade: it checks for outdated
-packages, shows a table with current and latest versions, prompts for
-confirmation, then upgrades each package individually — retrying failures before
-reporting a summary.
-.PP
-All upgrades run per-package rather than in a single batch, so a failure in one
-package does not abort the others.
+If
+.B uv
+is installed, the outdated check uses it for a much faster query, falling
+back to pip automatically on any error.
 .SH OPTIONS
 .TP
 .BR \-y ", " \-\-yes
 Auto-approve all upgrades without an interactive prompt.
+Mutually exclusive with
+.BR \-\-interactive .
+.TP
+.BR \-i ", " \-\-interactive
+Show a numbered list and choose which packages to upgrade. Accepts
+selections like
+.BR 1,3,5\-7 ,
+.BR all ,
+or
+.BR none .
+Selection implies consent; no second confirmation prompt is shown.
 .TP
 .B \-\-check\-only
 List outdated packages with version info and exit without upgrading.
+Exits with status 3 if any outdated packages were found.
 .TP
 .B \-\-dry\-run
 Print every command that would be executed without running any of them.
 Skips the confirmation prompt automatically.
 .TP
 .BI \-\-exclude " PKG " [ PKG " ...]"
-Space-separated list of package names to skip. Matching is case-insensitive,
-so
-.B \-\-exclude pillow
-matches
-.BR Pillow .
+Space-separated list of package names to skip. Matching is case-insensitive
+and glob patterns are supported:
 .RS
 .EX
-python3 PakMan.py --exclude pip setuptools
+python3 PakMan.py --exclude 'boto*' setuptools
 .EE
 .RE
 .TP
 .BI \-\-only " PKG " [ PKG " ...]"
-Upgrade only the listed packages. Matching is case-insensitive. Packages not
-in the outdated list are silently ignored. Specifying the same package in both
+Upgrade only the listed packages. Case-insensitive, glob patterns supported.
+Specifying the same name in both
 .B \-\-only
 and
 .B \-\-exclude
 is an error.
-.RS
-.EX
-python3 PakMan.py --only requests boto3
-.EE
-.RE
 .TP
 .B \-\-upgrade\-pip
 Upgrade
 .B pip
-itself (via
-.BR "pip install --upgrade pip" )
-before upgrading any other packages.
+itself before upgrading any other packages.
 .TP
 .B \-\-pre
+Allow installation of pre-release versions.
+.TP
+.B \-\-only\-binary
 Pass
-.B \-\-pre
-to pip when upgrading, allowing installation of pre-release versions.
+.B \-\-only\-binary=:all:
+to pip, refusing source distributions. Installing an sdist executes its
+build code; wheels do not — this flag guarantees no package code runs at
+install time.
+.TP
+.B \-\-require\-venv
+Refuse to run outside a virtual environment (exit 1). Without this flag a
+prominent warning is printed instead.
+.TP
+.B \-\-audit
+After upgrading, scan the environment for known vulnerabilities with
+.BR pip-audit .
+Skipped with a hint if pip-audit is not installed.
+.TP
+.B \-\-no\-uv
+Use pip for the outdated check even if
+.B uv
+is installed.
+.TP
+.B \-\-no\-rollback
+Skip writing the rollback snapshot file.
+.TP
+.B \-\-no\-batch
+Skip the batch upgrade attempt and go straight to per-package upgrades.
 .TP
 .BI \-\-export " FILE"
 After all upgrades complete, run
 .B pip freeze
 and write the output to
 .IR FILE .
-If the freeze command fails, a warning is printed and the file is not written.
-.RS
-.EX
-python3 PakMan.py -y --export requirements.txt
-.EE
-.RE
+If the freeze command fails, a warning is printed and no file is written.
 .TP
 .B \-\-notify
 Send a native macOS notification (via
 .BR osascript )
-when the run completes. Special characters in package names and error messages
-are escaped to prevent AppleScript injection.
+when the run completes. Notification text is escaped to prevent AppleScript
+injection.
 .TP
 .B \-\-json
 Print the outdated package list as a JSON array and exit. No upgrades are
-performed. Each entry contains
-.IR name ", " version ", " latest_version ", " latest_filetype .
+performed.
+.TP
+.B \-\-log\-json
+Append one structured JSON record per run (upgraded packages, failures,
+dependency conflicts, elapsed time, exit code) to
+.IR ~/.pakman_history.jsonl .
 .TP
 .BI \-\-retries " N"
-Number of retry attempts per package when an upgrade fails. Default is
-.BR 2 .
-Minimum value is
+Number of retry attempts per package on the fallback path. Default is
+.BR 2 ,
+minimum is
 .BR 1 .
+.TP
+.BI \-\-timeout " SECS"
+Timeout per package in seconds; the batch attempt gets timeout multiplied by
+the package count. Default is
+.BR 600 .
+A package stuck building from source becomes a recorded failure instead of
+hanging the run.
+.SH EXIT STATUS
+.TP
+.B 0
+Success — nothing to do, or all upgrades succeeded.
+.TP
+.B 1
+Fatal error (non-TTY without \-y, \-\-require\-venv outside a venv, ...).
+.TP
+.B 2
+Run completed but one or more packages failed.
+.TP
+.B 3
+.B \-\-check\-only
+found outdated packages.
+.TP
+.B 130
+Interrupted with Ctrl-C.
 .SH FEATURES
-.SS Per-Package Retries and Partial Failures
-Each package is upgraded with its own
+.SS Batch Upgrade with Per-Package Fallback
+All packages are first upgraded in a single
 .B pip install --upgrade
-call. On failure it retries up to
-.B --retries N
-times before being marked failed. All other packages continue regardless.
-A summary is printed at the end:
+call — one resolver run instead of N. Only if the batch fails does PakMan
+fall back to per-package upgrades (with parallel wheel prefetch) to isolate
+the failure. Note that a batch resolver run may choose a version other than
+the newest if a newer version conflicts with another package's requirements;
+the post-run
+.B pip check
+covers this.
+.SS Rollback Snapshot
+Before upgrading, current versions are written as
+.I pkg==version
+lines to
+.IR ~/.pakman_rollback_YYYYMMDD_HHMMSS.txt .
+Undo an entire run with:
 .RS
 .EX
-\(bu some-package: error details here
+pip install -r ~/.pakman_rollback_<timestamp>.txt
 .EE
 .RE
-.SS Outdated Table
-Displays package name, installed version, latest available version, and
-release type (wheel, sdist). Column widths are derived from the actual data,
-so long package names are never truncated.
-.SS Case-Insensitive Package Filtering
-.B \-\-only
-and
-.B \-\-exclude
-match package names case-insensitively against the canonical names returned
-by pip. Specifying the same name in both flags is rejected at parse time.
-.SS Virtualenv Warning
-Detects whether a virtualenv is active. If not, prints a warning before
-touching any global packages.
-.SS pip Self-Upgrade
-.B \-\-upgrade\-pip
-runs
-.B pip install --upgrade pip
-before any other upgrades, ensuring the latest resolver is used.
-.SS Freeze Export
-.B \-\-export FILE
-runs
-.B pip freeze
-after all upgrades and writes the output to
-.IR FILE .
-If the freeze command exits non-zero, a warning is printed and no file is
-written.
-.SS Upgrade Log
-Every run appends timestamped entries to
-.IR ~/.pakman.log
-via Python's
-.B logging
-module:
-.RS
-.EX
-[2026-03-28 14:05:01] --- PakMan run started ---
-[2026-03-28 14:05:08] Upgraded: requests 2.28.0 -> 2.31.0
-[2026-03-28 14:05:12] FAILED: some-pkg -- error details
-[2026-03-28 14:05:13] Run complete with 1 failure(s). Elapsed: 12.4s
-.EE
-.RE
+The five newest snapshots are kept; older ones are pruned.
+.SS Dependency Health Check
+.B pip check
+runs automatically after every upgrade and surfaces broken dependency graphs
+in the output, the log, and the JSON history.
+.SS Security Hardening
+Package names are validated against PEP 508 naming rules before reaching any
+subprocess. The log file is created with mode 0600. Every pip invocation
+writes an AUDIT line with the exact command and exit code. Pip's own version
+self-check is disabled on every call.
+.SS Clean Interrupts and Cron Safety
+Ctrl-C mid-upgrade prints how many packages were upgraded, failed, and not
+attempted, then exits 130. In a non-TTY session without
+.BR \-y ,
+the tool exits 1 immediately instead of hanging on the prompt.
 .SH EXAMPLES
 .TP
 Standard interactive upgrade:
@@ -156,19 +191,29 @@ Standard interactive upgrade:
 python3 PakMan.py
 .EE
 .TP
-Auto-approve, skip pip and setuptools, notify on completion:
+Pick packages from a numbered list:
 .EX
-python3 PakMan.py -y --exclude pip setuptools --notify
+python3 PakMan.py -i
 .EE
 .TP
-Preview outdated packages only:
+Auto-approve, skip all boto packages, notify:
 .EX
-python3 PakMan.py --check-only
+python3 PakMan.py -y --exclude 'boto*' --notify
 .EE
 .TP
-Upgrade only specific packages:
+Wheels only — never execute sdist build code:
 .EX
-python3 PakMan.py --only requests boto3 -y
+python3 PakMan.py --only-binary -y
+.EE
+.TP
+Refuse to touch global site-packages:
+.EX
+python3 PakMan.py --require-venv -y
+.EE
+.TP
+Upgrade, then scan for known vulnerabilities:
+.EX
+python3 PakMan.py -y --audit
 .EE
 .TP
 Upgrade pip first, then everything, export freeze when done:
@@ -176,24 +221,22 @@ Upgrade pip first, then everything, export freeze when done:
 python3 PakMan.py --upgrade-pip -y --export requirements.txt
 .EE
 .TP
-Include pre-release versions:
+Cron-friendly run with JSON history:
 .EX
-python3 PakMan.py --pre -y
-.EE
-.TP
-Output outdated list as JSON for scripting:
-.EX
-python3 PakMan.py --json
-.EE
-.TP
-Retry each failure up to 3 times:
-.EX
-python3 PakMan.py --retries 3 -y
+python3 PakMan.py -y --log-json --no-rollback
 .EE
 .SH FILES
 .TP
 .I ~/.pakman.log
-Timestamped log of all PakMan runs, upgrades, and failures.
+Timestamped log of all runs with per-command AUDIT lines. Mode 0600.
+.TP
+.I ~/.pakman_history.jsonl
+One JSON record per run when
+.B \-\-log\-json
+is set. Mode 0600.
+.TP
+.I ~/.pakman_rollback_YYYYMMDD_HHMMSS.txt
+Pre-upgrade version snapshots; the five newest are kept.
 .SH REQUIREMENTS
 Python 3.10 or later.
 .B pip
@@ -205,6 +248,13 @@ The
 flag requires
 .B osascript
 (available by default on macOS).
+.PP
+Optional:
+.B uv
+for fast outdated checks,
+.B pip-audit
+for
+.BR \-\-audit .
 .SH AUTHOR
 Anirban Bagchi
 .SH SEE ALSO
