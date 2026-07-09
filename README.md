@@ -27,6 +27,7 @@ This repository may include (but is not limited to):
 - 📊 **Data engineering utilities** (ETL helpers, Spark snippets, SQL patterns)
 - ☁️ **Cloud & DevOps experiments** (AWS, Databricks, CI/CD ideas)
 - 🤖 **AI & LLM prototypes** (prompting, agents, evaluations)
+- 🎓 **Claude Agent Skills** (see `claude-skills/`)
 - 🧪 **Proofs of concept** and exploratory code
 - 🧪 **VS Code Theme**, maybe experimental
 - 📝 **Notes & references** worth preserving
@@ -63,6 +64,24 @@ See [`mac-utilities/skills/brewmaster.md`](mac-utilities/skills/brewmaster.md) f
 
 ---
 
+## 🎓 claude-skills
+
+Agent Skills that extend Claude with domain expertise, scripts, and reference material. Eighteen skills in total: seventeen vendored from [anthropics/skills](https://github.com/anthropics/skills), plus a first-party `mac-utilities` skill that drives the tools above.
+
+Skills are model-invoked — Claude loads one automatically when your request matches its description. They are **not active where they sit**; see [`claude-skills/README.md`](claude-skills/README.md) for how to install them into `~/.claude/skills/` or `.claude/skills/`.
+
+```bash
+# Install every skill for your user, as symlinks
+mkdir -p ~/.claude/skills
+for d in claude-skills/*/; do
+  ln -sfn "$(pwd)/${d%/}" ~/.claude/skills/"$(basename "$d")"
+done
+```
+
+⚠️ **Licensing varies.** The vendored skills are *not* MIT — four carry Anthropic proprietary terms. See [`claude-skills/README.md`](claude-skills/README.md#-licensing) and [`claude-skills/SOURCE.md`](claude-skills/SOURCE.md).
+
+---
+
 ## 📁 Recommended Repository Structure
 
 ```text
@@ -74,6 +93,12 @@ DangerousDave/
 |   vs-code-theme
 │   ├── theme_1
 │   ├── theme_2
+├── claude-skills/
+│   ├── README.md
+│   ├── SOURCE.md          # vendoring provenance + digests
+│   ├── mac-utilities/     # first-party skill
+│   └── <skill-name>/
+│       └── SKILL.md
 ├── projects/
 │   ├── project-name-1/
 │   │   ├── README.md
@@ -115,3 +140,5 @@ DangerousDave/
 ## 📜 License
 
 MIT License - See LICENSE file for details.
+
+**Exception:** the vendored skills under [`claude-skills/`](claude-skills/) carry their own terms (Apache-2.0 or Anthropic proprietary, depending on the skill) and are **not** MIT-licensed. See [`claude-skills/README.md`](claude-skills/README.md#-licensing).
