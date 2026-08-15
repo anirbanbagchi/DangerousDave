@@ -26,7 +26,6 @@ env/
 .python-version
 
 # Distribution / packaging
-dist/
 build/
 *.egg-info/
 *.egg
@@ -55,6 +54,7 @@ out/
 # Claude Code
 # -----------------------------------------------
 .claude/settings.local.json
+.claude/memory/
 
 # -----------------------------------------------
 # Editor & IDE
@@ -71,3 +71,10 @@ out/
 # -----------------------------------------------
 *.log
 *.backup-*
+
+# -----------------------------------------------
+# Scratch
+# -----------------------------------------------
+# Generated PR description, for copy/paste into GitHub. Rewritten in place
+# each time PR comments are regenerated.
+PR_BODY.md

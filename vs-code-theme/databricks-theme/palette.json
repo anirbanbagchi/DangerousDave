@@ -1,0 +1,127 @@
+{
+  "name": "Databricks theme palette",
+  "note": "Single source of truth for every colour used by the two theme files. Only the values under `brand` are official Databricks brand colours; everything under `ramps`, `supporting` and `terminalBright` is extrapolated from them so the theme has enough steps to work with. Swap values here (and regenerate/adjust the theme JSON) to re-tune the whole theme in one place.",
+  "brand": {
+    "lava600": "#FF3621",
+    "navy800": "#1B3139",
+    "navy900": "#0B2026",
+    "oatLight": "#F9F7F4",
+    "oatMedium": "#EEEDE9",
+    "white": "#FFFFFF"
+  },
+  "ramps": {
+    "lava": {
+      "note": "Accent ramp. `lava600` is the brand colour; the other steps are derived. Numbering skips 500 so `lava600` keeps the official 'Lava 600' name.",
+      "lava100": "#FFE9E5",
+      "lava200": "#FFB4A6",
+      "lava300": "#FF8A76",
+      "lava400": "#FF6A52",
+      "lava600": "#FF3621",
+      "lava700": "#D62B18",
+      "lava800": "#A62011",
+      "lava900": "#75160B"
+    },
+    "navy": {
+      "note": "Neutral spine. `navy800` and `navy900` are brand colours; the lighter steps and `navy850` (the dark-variant surface, sitting between the two brand navies) are derived.",
+      "navy100": "#EDF1F2",
+      "navy200": "#D6DFE2",
+      "navy300": "#B4C2C7",
+      "navy400": "#8DA1A9",
+      "navy500": "#67808A",
+      "navy600": "#4A636E",
+      "navy700": "#33505A",
+      "navy800": "#1B3139",
+      "navy850": "#122B33",
+      "navy900": "#0B2026"
+    },
+    "oat": {
+      "note": "Light neutrals. `oatWhite`, `oatLight` and `oatMedium` are brand colours; `oatDark` and `oatDeep` are derived.",
+      "oatWhite": "#FFFFFF",
+      "oatLight": "#F9F7F4",
+      "oatMedium": "#EEEDE9",
+      "oatDark": "#DBD7CE",
+      "oatDeep": "#C4BFB3"
+    }
+  },
+  "supporting": {
+    "note": "Syntax and status hues, harmonised with the brand and kept desaturated so Lava stays the loudest colour on screen. The same role keeps the same hue family in both variants; only lightness shifts.",
+    "light": {
+      "blue": "#1B6FA8",
+      "teal": "#0B7B7B",
+      "green": "#0F7A52",
+      "yellow": "#8A5A00",
+      "purple": "#6B4FA8"
+    },
+    "dark": {
+      "blue": "#6FB6E0",
+      "teal": "#4FBFBB",
+      "green": "#4FC08D",
+      "yellow": "#E5A93C",
+      "purple": "#B396E8"
+    }
+  },
+  "terminalBright": {
+    "note": "Derived one step per supporting hue so all 16 ANSI slots can be filled with readable colours. Light-mode brights go deeper (a lighter 'bright' is unreadable on an Oat background); dark-mode brights go lighter.",
+    "light": {
+      "blue": "#12507A",
+      "teal": "#075858",
+      "green": "#0A583B",
+      "yellow": "#5F3E00",
+      "purple": "#4E3A7C"
+    },
+    "dark": {
+      "blue": "#9BD0EE",
+      "teal": "#7FD6D3",
+      "green": "#86D9B1",
+      "yellow": "#F0C570",
+      "purple": "#CDBBF1"
+    }
+  },
+  "roles": {
+    "note": "How the ramps map onto each variant. The theme JSON files are the authority; this block documents the intent.",
+    "light": {
+      "editorBackground": "oatLight",
+      "surfaceBackground": "oatMedium",
+      "elevatedBackground": "oatWhite",
+      "foreground": "navy800",
+      "mutedForeground": "navy600",
+      "decorativeBorder": "oatDark",
+      "functionalBorder": "navy500",
+      "accent": "lava600",
+      "accentText": "lava700",
+      "accentPressed": "lava800"
+    },
+    "dark": {
+      "editorBackground": "navy900",
+      "surfaceBackground": "navy850",
+      "elevatedBackground": "navy800",
+      "foreground": "navy200",
+      "mutedForeground": "navy400",
+      "decorativeBorder": "navy700",
+      "functionalBorder": "navy500",
+      "accent": "lava600",
+      "accentText": "lava600",
+      "accentPressed": "lava700"
+    },
+    "both": {
+      "statusBarBackground": "navy800",
+      "statusBarForeground": "oatLight",
+      "statusBarDebugging": "lava700",
+      "buttonBackground": "lava700",
+      "buttonForeground": "oatWhite",
+      "bracketPairCycle": ["lava", "blue", "teal", "purple", "green", "yellow"]
+    }
+  },
+  "alpha": {
+    "note": "Alpha suffixes used for translucent layers, so selection, find match and word highlight stack legibly.",
+    "selection": "80",
+    "selectionInactive": "4D",
+    "selectionHighlight": "59",
+    "findMatch": "66",
+    "findMatchHighlight": "40",
+    "wordHighlight": "26",
+    "rangeHighlight": "33",
+    "diffText": "26",
+    "diffLine": "19"
+  }
+}

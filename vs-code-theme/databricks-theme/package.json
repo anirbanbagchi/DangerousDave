@@ -1,0 +1,57 @@
+{
+  "name": "databricks-theme",
+  "displayName": "Databricks",
+  "description": "Databricks Light and Databricks Dark — a two-variant VS Code colour theme built from the Databricks brand palette, tuned for Python, SQL, Scala, R, YAML, JSON and Markdown.",
+  "version": "0.1.0",
+  "publisher": "anirbanbagchi",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.75.0"
+  },
+  "categories": [
+    "Themes"
+  ],
+  "keywords": [
+    "theme",
+    "color-theme",
+    "light",
+    "dark",
+    "databricks",
+    "python",
+    "sql",
+    "scala",
+    "r",
+    "yaml",
+    "notebook",
+    "accessibility"
+  ],
+  "galleryBanner": {
+    "color": "#1B3139",
+    "theme": "dark"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/anirbanbagchi/DangerousDave.git",
+    "directory": "vs-code-theme/databricks-theme"
+  },
+  "bugs": {
+    "url": "https://github.com/anirbanbagchi/DangerousDave/issues"
+  },
+  "scripts": {
+    "check-contrast": "node scripts/check-contrast.mjs"
+  },
+  "contributes": {
+    "themes": [
+      {
+        "label": "Databricks Light",
+        "uiTheme": "vs",
+        "path": "./themes/databricks-light-color-theme.json"
+      },
+      {
+        "label": "Databricks Dark",
+        "uiTheme": "vs-dark",
+        "path": "./themes/databricks-dark-color-theme.json"
+      }
+    ]
+  }
+}

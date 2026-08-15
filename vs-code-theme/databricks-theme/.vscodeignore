@@ -1,0 +1,19 @@
+# Build spec and dev tooling — not part of the published extension
+SPECS.md
+scripts/**
+images/README.md
+.gitignore
+.vscodeignore
+.vscode/**
+
+# macOS
+.DS_Store
+**/.DS_Store
+
+# Node
+node_modules/**
+npm-debug.log*
+
+# Packaged output
+dist/**
+*.vsix
