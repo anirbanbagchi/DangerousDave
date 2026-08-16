@@ -1,7 +1,11 @@
 # Build spec and dev tooling — not part of the published extension
 SPECS.md
 scripts/**
-images/README.md
+
+# Screenshots are referenced from README.md by absolute raw.githubusercontent
+# URLs, so packaging them would add ~2.6 MB to every install for nothing.
+# If a Marketplace icon is added, un-ignore it: !images/icon.png
+images/**
 .gitignore
 .vscodeignore
 .vscode/**

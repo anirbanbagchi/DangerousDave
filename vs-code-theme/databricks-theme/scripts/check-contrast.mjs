@@ -165,7 +165,7 @@ const TEXT_PAIRS = [
   ['editorWidget.foreground', 'editorWidget.background'],
   ['editorSuggestWidget.foreground', 'editorSuggestWidget.background'],
   ['editorSuggestWidget.highlightForeground', 'editorSuggestWidget.background'],
-  ['editorSuggestWidget.selectedForeground', 'editorSuggestWidget.selectedBackground'],
+  ['editorSuggestWidget.selectedForeground', 'editorSuggestWidget.selectedBackground', 'editorSuggestWidget.background'],
   ['editorSuggestWidgetStatus.foreground', 'editorSuggestWidget.background'],
   ['editorHoverWidget.foreground', 'editorHoverWidget.background'],
 
@@ -175,12 +175,12 @@ const TEXT_PAIRS = [
 
   ['sideBar.foreground', 'sideBar.background'],
   ['sideBarTitle.foreground', 'sideBar.background'],
-  ['sideBarSectionHeader.foreground', 'sideBarSectionHeader.background'],
+  ['sideBarSectionHeader.foreground', 'sideBarSectionHeader.background', 'sideBar.background'],
 
-  ['list.activeSelectionForeground', 'list.activeSelectionBackground'],
-  ['list.inactiveSelectionForeground', 'list.inactiveSelectionBackground'],
+  ['list.activeSelectionForeground', 'list.activeSelectionBackground', 'sideBar.background'],
+  ['list.inactiveSelectionForeground', 'list.inactiveSelectionBackground', 'sideBar.background'],
   ['list.hoverForeground', 'list.hoverBackground', 'sideBar.background'],
-  ['list.highlightForeground', 'list.activeSelectionBackground'],
+  ['list.highlightForeground', 'list.activeSelectionBackground', 'sideBar.background'],
   ['list.deemphasizedForeground', 'sideBar.background'],
   ['list.invalidItemForeground', 'sideBar.background'],
   ['list.errorForeground', 'sideBar.background'],
@@ -208,8 +208,8 @@ const TEXT_PAIRS = [
   ['titleBar.activeForeground', 'titleBar.activeBackground'],
   ['titleBar.inactiveForeground', 'titleBar.inactiveBackground'],
   ['menu.foreground', 'menu.background'],
-  ['menu.selectionForeground', 'menu.selectionBackground'],
-  ['menubar.selectionForeground', 'menubar.selectionBackground'],
+  ['menu.selectionForeground', 'menu.selectionBackground', 'menu.background'],
+  ['menubar.selectionForeground', 'menubar.selectionBackground', 'titleBar.activeBackground'],
   ['commandCenter.foreground', 'commandCenter.background'],
   ['commandCenter.inactiveForeground', 'commandCenter.background'],
   ['commandCenter.activeForeground', 'commandCenter.activeBackground'],
@@ -217,7 +217,7 @@ const TEXT_PAIRS = [
 
   ['panelTitle.activeForeground', 'panel.background'],
   ['panelTitle.inactiveForeground', 'panel.background'],
-  ['panelSectionHeader.foreground', 'panelSectionHeader.background'],
+  ['panelSectionHeader.foreground', 'panelSectionHeader.background', 'panel.background'],
   ['terminal.foreground', 'terminal.background'],
 
   ['debugConsole.infoForeground', 'panel.background'],
@@ -230,7 +230,7 @@ const TEXT_PAIRS = [
   ['debugTokenExpression.boolean', 'editor.background'],
   ['debugTokenExpression.number', 'editor.background'],
   ['debugTokenExpression.error', 'editor.background'],
-  ['debugView.stateLabelForeground', 'debugView.stateLabelBackground'],
+  ['debugView.stateLabelForeground', 'debugView.stateLabelBackground', 'sideBar.background'],
 
   ['input.foreground', 'input.background'],
   ['input.placeholderForeground', 'input.background'],
@@ -255,13 +255,13 @@ const TEXT_PAIRS = [
   ['notificationLink.foreground', 'notifications.background'],
   ['notificationCenterHeader.foreground', 'notificationCenterHeader.background'],
   ['quickInput.foreground', 'quickInput.background'],
-  ['quickInputList.focusForeground', 'quickInputList.focusBackground'],
+  ['quickInputList.focusForeground', 'quickInputList.focusBackground', 'quickInput.background'],
   ['pickerGroup.foreground', 'quickInput.background'],
   ['search.resultsInfoForeground', 'sideBar.background'],
 
   ['peekViewResult.fileForeground', 'peekViewResult.background'],
   ['peekViewResult.lineForeground', 'peekViewResult.background'],
-  ['peekViewResult.selectionForeground', 'peekViewResult.selectionBackground'],
+  ['peekViewResult.selectionForeground', 'peekViewResult.selectionBackground', 'peekViewResult.background'],
   ['peekViewTitleLabel.foreground', 'peekViewTitle.background'],
   ['peekViewTitleDescription.foreground', 'peekViewTitle.background'],
   ['diffEditor.unchangedRegionForeground', 'diffEditor.unchangedRegionBackground'],
@@ -325,11 +325,11 @@ const UI_PAIRS = [
   ['progressBar.background', 'editor.background'],
   ['settings.modifiedItemIndicator', 'editor.background'],
 
-  ['list.focusOutline', 'list.activeSelectionBackground'],
-  ['list.focusAndSelectionOutline', 'list.activeSelectionBackground'],
-  ['list.inactiveFocusOutline', 'list.inactiveSelectionBackground'],
-  ['menu.selectionBorder', 'menu.selectionBackground'],
-  ['menubar.selectionBorder', 'menubar.selectionBackground'],
+  ['list.focusOutline', 'list.activeSelectionBackground', 'sideBar.background'],
+  ['list.focusAndSelectionOutline', 'list.activeSelectionBackground', 'sideBar.background'],
+  ['list.inactiveFocusOutline', 'list.inactiveSelectionBackground', 'sideBar.background'],
+  ['menu.selectionBorder', 'menu.selectionBackground', 'menu.background'],
+  ['menubar.selectionBorder', 'menubar.selectionBackground', 'titleBar.activeBackground'],
   ['listFilterWidget.outline', 'editorWidget.background'],
   ['listFilterWidget.noMatchesOutline', 'editorWidget.background'],
 
@@ -404,6 +404,55 @@ const ANSI_SLOTS = [
   'terminal.ansiBrightBlue', 'terminal.ansiBrightMagenta', 'terminal.ansiBrightCyan'
 ];
 
+/**
+ * Roles the accent owns outright. The theme's rule is that Lava is the accent,
+ * not the wallpaper: these keys must come from the Lava ramp, and no supporting
+ * syntax hue may appear in them. Checked so "Lava stays dominant" is verified
+ * rather than asserted.
+ */
+const LAVA_RAMP = ['#FFE9E5', '#FFB4A6', '#FF8A76', '#FF6A52', '#FF3621', '#D62B18', '#A62011', '#75160B'];
+
+const LAVA_RESERVED = [
+  'focusBorder',
+  'contrastActiveBorder',
+  'editorCursor.foreground',
+  'editorMultiCursor.primary.foreground',
+  'terminalCursor.foreground',
+  'tab.activeBorderTop',
+  'activityBar.activeBorder',
+  'activityBarTop.activeBorder',
+  'activityBarBadge.background',
+  'badge.background',
+  'profileBadge.background',
+  'progressBar.background',
+  'panelTitle.activeBorder',
+  'peekView.border',
+  'sash.hoverBorder',
+  'settings.modifiedItemIndicator',
+  'notebook.focusedCellBorder',
+  'notebook.cellInsertionIndicator',
+  'button.background',
+  'extensionButton.prominentBackground',
+  'statusBar.debuggingBackground',
+  'editorError.foreground',
+  'textBlockQuote.border'
+];
+
+function lavaReserve(theme) {
+  const problems = [];
+  for (const key of LAVA_RESERVED) {
+    const value = theme.colors[key];
+    if (value === undefined) {
+      problems.push(`${key} is not set`);
+      continue;
+    }
+    if (!LAVA_RAMP.includes(value.slice(0, 7).toUpperCase())) {
+      problems.push(`${key} = ${value} is not from the Lava ramp`);
+    }
+  }
+  return problems;
+}
+
 /* -------------------------------------------------------------------- runner */
 
 function resolve(theme, key) {
@@ -437,8 +486,26 @@ function checkTheme(theme, raw) {
     });
   }
 
-  for (const [fgKey, bgKey] of UI_PAIRS) {
-    add('ui / borders / icons', UI, `${fgKey} on ${bgKey}`, resolve(theme, fgKey), resolve(theme, bgKey));
+  for (const [fgKey, bgKey, baseKey] of UI_PAIRS) {
+    const bgBase = baseKey ? composite(resolve(theme, baseKey), base) : base;
+    const bg = composite(resolve(theme, bgKey), bgBase);
+    const fg = composite(resolve(theme, fgKey), bg);
+    const ratio = contrast(fg, bg);
+    rows.push({
+      group: 'ui / borders / icons',
+      threshold: UI,
+      label: `${fgKey} on ${bgKey}`,
+      ratio,
+      pass: ratio + 1e-9 >= UI
+    });
+  }
+
+  // Every symbol icon, against both surfaces it is drawn on.
+  for (const key of Object.keys(theme.colors).filter((k) => k.startsWith('symbolIcon.'))) {
+    add('symbol icons', UI, `${key} on editorSuggestWidget.background`, resolve(theme, key),
+      composite(resolve(theme, 'editorSuggestWidget.background'), base));
+    add('symbol icons', UI, `${key} on sideBar.background`, resolve(theme, key),
+      composite(resolve(theme, 'sideBar.background'), base));
   }
 
   const terminalBg = composite(resolve(theme, 'terminal.background'), base);
@@ -458,7 +525,7 @@ function checkTheme(theme, raw) {
     add('syntax (semantic)', TEXT, `${token} on editor.background`, parseHex(fg), base);
   }
 
-  return { rows, dups: duplicateKeys(raw) };
+  return { rows, dups: duplicateKeys(raw), lava: lavaReserve(theme) };
 }
 
 function print(name, result) {
@@ -488,7 +555,12 @@ function print(name, result) {
   } else {
     console.log('  no duplicate keys');
   }
-  return failed.length + result.dups.length;
+  if (result.lava.length) {
+    for (const p of result.lava) console.log(`  \x1b[31mLava reserve\x1b[0m ${p}`);
+  } else {
+    console.log(`  Lava reserve intact: all ${LAVA_RESERVED.length} accent roles come from the Lava ramp`);
+  }
+  return failed.length + result.dups.length + result.lava.length;
 }
 
 const files = [

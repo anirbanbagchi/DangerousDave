@@ -3,10 +3,13 @@
 A two-variant VS Code colour theme built strictly from the Databricks brand
 palette — **Databricks Light** (the default) and **Databricks Dark**.
 
-Lava is the accent, never the wallpaper: it is reserved for focus borders, the
-active tab indicator, the cursor, badges, progress bars and errors. The status
-bar is Navy 800 in *both* variants, so the theme reads as Databricks at a
-glance whichever variant you are in.
+Seven syntax hues spread evenly around the colour wheel, so code reads as
+colour rather than as one long stretch of grey — while Lava stays the accent
+and never becomes the wallpaper. Lava is reserved for focus borders, the active
+tab indicator, the cursor, badges, progress bars and errors, and nothing else
+is allowed into those roles (`scripts/check-contrast.mjs` enforces it). The
+status bar is Navy 800 in *both* variants, so the theme reads as Databricks at
+a glance whichever variant you are in.
 
 ## Screenshots
 
@@ -30,10 +33,10 @@ Press `F5` to launch an Extension Development Host, then
 ### As a VSIX
 
 A packaged build is checked in at
-[`dist/databricks-theme-0.1.0.vsix`](dist/databricks-theme-0.1.0.vsix):
+[`dist/databricks-theme-0.2.0.vsix`](dist/databricks-theme-0.2.0.vsix):
 
 ```bash
-code --install-extension dist/databricks-theme-0.1.0.vsix
+code --install-extension dist/databricks-theme-0.2.0.vsix
 ```
 
 To rebuild it:
@@ -41,7 +44,7 @@ To rebuild it:
 ```bash
 npm i -g @vscode/vsce
 cd vs-code-theme/databricks-theme
-vsce package --out dist/databricks-theme-0.1.0.vsix
+vsce package --out dist/databricks-theme-0.2.0.vsix
 ```
 
 The extension ID is `anirbanbagchi.databricks-theme`, matching the other themes
@@ -88,17 +91,26 @@ brand colours — they are **not** officially published Databricks values.
 
 ### Supporting hues
 
-Restrained saturation, so Lava stays the loudest colour on screen. The same
-semantic role keeps the same hue family in both variants — only lightness
-shifts.
+Seven hues, spread around the wheel so adjacent tokens never land in the same
+wedge. Lava sits alone at hue ~7 at full chroma; **no supporting hue is allowed
+into the warm-red wedge**, which is how the accent stays the accent while
+everything else gets more colourful. The same semantic role keeps the same hue
+family in both variants — only lightness shifts.
 
-| Hue | Light | Dark |
-| --- | --- | --- |
-| Blue | `#1B6FA8` | `#6FB6E0` |
-| Teal | `#0B7B7B` | `#4FBFBB` |
-| Green | `#0F7A52` | `#4FC08D` |
-| Yellow / Amber | `#8A5A00` | `#E5A93C` |
-| Purple | `#6B4FA8` | `#B396E8` |
+| Hue | ~Angle | Light | Dark | Deep (light surfaces) |
+| --- | --- | --- | --- | --- |
+| Amber | 37° | `#9A5E00` | `#F0AE4A` | `#6B4100` |
+| Green | 92° | `#3A7A00` | `#A5D24A` | `#2A5800` |
+| Teal | 168° | `#0A7A5E` | `#45C99A` | `#075843` |
+| Cyan | 192° | `#0B7B93` | `#4FC3DD` | `#08596B` |
+| Blue | 223° | `#1D5FD1` | `#7FA8FF` | `#0F4A9E` |
+| Purple | 265° | `#6A3FC0` | `#B98CFF` | `#4A2A8C` |
+| Magenta | 318° | `#B01E8E` | `#F07FD0` | `#7D1463` |
+
+The **Deep** column is used in the light variant wherever a hue sits on the Oat
+Medium side bar or panel instead of the Oat Light editor background — several
+base hues clear 4.5:1 on one and not the other. In the dark variant the base
+hues clear both, so Deep mirrors the base.
 
 ## Surfaces
 
@@ -118,20 +130,32 @@ shifts.
 | Role | Hue |
 | --- | --- |
 | Strings, inserted diff lines | Green |
-| Types, classes, interfaces, enums, namespaces, escapes, regex | Teal |
-| Functions, methods, properties, object/JSON/YAML keys, tags, links | Blue |
+| Numbers, constants, enum members, attributes | Amber |
 | Keywords, control flow, storage, `self`/`this`, YAML anchors, SQL keywords | Purple |
-| Numbers, constants, enum members, attributes | Yellow / Amber |
+| Functions, methods | Blue |
+| Types, classes, interfaces, enums, structs, namespaces, escapes, regex | Teal |
+| Properties, object keys, JSON/YAML keys, tags, parameters *(italic)* | Cyan |
+| Variables, shell variables, references | Magenta |
 | Decorators, Markdown headings, invalid, deleted diff lines | Lava |
-| Variables, operators, punctuation, comments, parameters | Navy |
+| Operators, punctuation, comments *(italic)* | Navy |
+
+Operators, punctuation and comments stay Navy on purpose: they are the page's
+structure, not its content, and colouring them fights the seven hues that carry
+meaning. Loudness runs inversely to frequency — the most common tokens are the
+quietest.
+
+The same mapping drives the 33 `symbolIcon.*` colours, so the suggest widget
+and outline view match the code they describe.
 
 Bracket-pair colorization cycles **Lava → Blue → Teal → Purple → Green →
-Yellow**. Terminal ANSI maps all 16 slots, with `red` → Lava.
+Amber**. Terminal ANSI maps all 16 slots, with `red` → Lava, `magenta` →
+Magenta and `cyan` → Cyan.
 
 Language details that get explicit treatment: Python decorators (Lava) and
 f-string placeholders (Teal), SQL DML/DDL keywords (Purple) vs. SQL functions
-(Blue), YAML anchors and aliases (bold Purple) vs. YAML keys (Blue), JSON keys
-(Blue), Scala declarations, R functions, and the full Markdown set.
+(Blue) vs. table and database names (Cyan), YAML anchors and aliases (bold
+Purple) vs. YAML keys (Cyan), JSON keys (Cyan), Scala declarations, R
+functions, shell variables (Magenta), and the full Markdown set.
 
 ## Accessibility
 
@@ -153,13 +177,16 @@ node scripts/check-contrast.mjs --fail # failures only
 ```
 
 The script parses both theme files, flattens translucent layers onto their
-backgrounds before measuring, checks 315 foreground/background pairs per
-variant, detects duplicate JSON keys, and asserts both variants declare the
-same set of workbench colour keys. It exits non-zero on any failure. Current
-status: **315/315 pass in each variant, 0 duplicate keys, 614 keys in both**.
+backgrounds before measuring, checks 381 foreground/background pairs per
+variant (including every symbol icon against both surfaces it is drawn on),
+detects duplicate JSON keys, asserts both variants declare the same set of
+workbench colour keys, and verifies the **Lava reserve** — that all 23 accent
+roles come from the Lava ramp and no supporting hue has crept into them. It
+exits non-zero on any failure. Current status: **381/381 pass in each variant,
+0 duplicate keys, 649 keys in both, Lava reserve intact**.
 
-The tightest passing ratios sit at 3.09:1 — brand Lava (`#FF3621`) used as a
-focus ring on the Oat Medium side bar. That is above the 3:1 bar for
+The tightest passing ratios sit at 3.09:1 — brand Lava (`#FF3621`) used as an
+active indicator on the Oat Medium side bar. That is above the 3:1 bar for
 non-text UI, but it is the least headroom in the theme; if you need more,
 switch `focusBorder` to Lava 700 (`#D62B18`).
 
@@ -174,7 +201,7 @@ databricks-theme/
 ├── .vscodeignore
 ├── palette.json
 ├── dist/
-│   └── databricks-theme-0.1.0.vsix
+│   └── databricks-theme-0.2.0.vsix
 ├── images/
 ├── scripts/
 │   └── check-contrast.mjs
@@ -200,30 +227,45 @@ databricks-theme/
 Documented rather than hidden:
 
 1. **Everything outside the six brand colours is derived.** The Lava, Navy and
-   Oat ramps, `#122B33` (dark secondary surface), and all five supporting hues
-   are extrapolations. They are collected in `palette.json` so they can be
-   replaced wholesale if official values are published.
-2. **Two Lava steps do the accent's text work.** Brand Lava on Oat Light is
+   Oat ramps, `#122B33` (dark secondary surface), and all seven supporting hues
+   (plus their Deep and Bright steps) are extrapolations. They are collected in
+   `palette.json` so they can be replaced wholesale if official values are
+   published.
+2. **The spec asked for restrained saturation; this theme is not restrained.**
+   `SPECS.md` says to "keep saturation restrained so Lava stays the loudest
+   colour on screen". Both variants were deliberately made more colourful than
+   that: two hues added (cyan, magenta), the original five re-saturated to the
+   limit of the contrast floor, and side-bar/panel headers and list rows tinted.
+   The accent rule was kept instead — Lava has *exclusive* ownership of focus,
+   cursor, badges, progress, the active tab indicator and errors, and the
+   contrast script fails if any other hue appears in those 23 roles. Note the
+   trade: several supporting hues now have a *higher* luminance than Lava; what
+   is protected is Lava's exclusivity, not its brightness.
+3. **No orange.** The obvious hue for variables would have been orange, but
+   orange sits next to Lava on the wheel and would compete with the accent.
+   Magenta and cyan were chosen instead, keeping the entire warm-red wedge for
+   Lava alone.
+4. **Two Lava steps do the accent's text work.** Brand Lava on Oat Light is
    3.38:1 — fine for a cursor or a focus ring, below the bar for text. Light-mode
    error text, active line numbers and links therefore use Lava 700 (`#D62B18`),
    and Lava on the Oat Medium side bar drops to Lava 800 (`#A62011`).
-3. **Buttons and badges use Lava 700, not brand Lava.** White text on `#FF3621`
+5. **Buttons and badges use Lava 700, not brand Lava.** White text on `#FF3621`
    is 3.62:1; on `#D62B18` it is 4.98:1.
-4. **Light-mode terminal "bright" colours go deeper, not lighter.** A lighter
+6. **Light-mode terminal "bright" colours go deeper, not lighter.** A lighter
    bright-green is unreadable on an Oat background, so the light variant's
    bright ANSI slots are darker, more saturated versions of their base hues.
    ANSI black/bright-black and white/bright-white are excluded from the contrast
    gate in both variants — those four slots are the extremes of the terminal's
    own palette and are low-contrast against one end of the background range by
    definition.
-5. **`charts.orange` is a second Lava step.** The brand palette has exactly one
+7. **`charts.orange` is a second Lava step.** The brand palette has exactly one
    warm hue. Rather than invent an orange, the chart series use two ends of the
    Lava ramp (`#A62011` / `#FF3621` in light, `#FF3621` / `#FFB4A6` in dark).
-6. **Validation backgrounds are neutral surfaces with coloured borders.** There
+8. **Validation backgrounds are neutral surfaces with coloured borders.** There
    is no brand-derived pale amber or pale blue, so warning and info inputs use
    the Oat/Navy surface with a coloured border instead of an invented tint.
    Error validation does use Lava 100 (`#FFE9E5`), which is on the ramp.
-7. **Decorative borders sit below 3:1 on purpose.** Oat Dark (`#DBD7CE`) is
+9. **Decorative borders sit below 3:1 on purpose.** Oat Dark (`#DBD7CE`) is
    ~1.4:1 against Oat Light. Per WCAG 1.4.11 the 3:1 bar applies to UI
    components and meaningful state, not to decorative separators, so panel and
    tab separators keep the brand-adjacent Oat Dark while inputs, checkboxes,

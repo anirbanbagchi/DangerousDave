@@ -2,7 +2,7 @@
   "name": "databricks-theme",
   "displayName": "Databricks",
   "description": "Databricks Light and Databricks Dark — a two-variant VS Code colour theme built from the Databricks brand palette, tuned for Python, SQL, Scala, R, YAML, JSON and Markdown.",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "publisher": "anirbanbagchi",
   "license": "MIT",
   "engines": {
