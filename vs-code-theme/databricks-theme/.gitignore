@@ -13,8 +13,10 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 
-# Removed so that we can publish VSIX files
-# *.vsix
+# Packaged builds are published artifacts in this repo, the same as the other
+# themes under vs-code-theme/. This negation overrides the root .gitignore's
+# `*.vsix` rule so `vsce package --out dist/…` output is tracked without -f.
+!dist/*.vsix
 
 # Build / temp
 out/

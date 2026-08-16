@@ -1,6 +1,6 @@
 {
   "name": "Databricks theme palette",
-  "note": "Single source of truth for every colour used by the two theme files. Only the values under `brand` are official Databricks brand colours; everything under `ramps`, `supporting` and `terminalBright` is extrapolated from them so the theme has enough steps to work with. Swap values here (and regenerate/adjust the theme JSON) to re-tune the whole theme in one place.",
+  "note": "Single source of truth for every colour used by the two theme files. Only the values under `brand` are official Databricks brand colours; everything under `ramps`, `supporting`, `deep` and `bright` is extrapolated from them so the theme has enough steps to work with. Swap values here (and regenerate/adjust the theme JSON) to re-tune the whole theme in one place.",
   "brand": {
     "lava600": "#FF3621",
     "navy800": "#1B3139",
@@ -44,37 +44,66 @@
     }
   },
   "supporting": {
-    "note": "Syntax and status hues, harmonised with the brand and kept desaturated so Lava stays the loudest colour on screen. The same role keeps the same hue family in both variants; only lightness shifts.",
+    "note": "Syntax and status hues. Seven hues spread evenly around the wheel (approximate hue angles: amber 37, green 92, teal 168, cyan 192, blue 223, purple 265, magenta 318) so adjacent tokens never land in the same wedge. Lava sits at hue 7 at full chroma and is deliberately the only colour in the warm-red wedge — no supporting hue is allowed to compete with it there. The same role keeps the same hue family in both variants; only lightness shifts.",
     "light": {
-      "blue": "#1B6FA8",
-      "teal": "#0B7B7B",
-      "green": "#0F7A52",
-      "yellow": "#8A5A00",
-      "purple": "#6B4FA8"
+      "blue": "#1D5FD1",
+      "cyan": "#0B7B93",
+      "teal": "#0A7A5E",
+      "green": "#3A7A00",
+      "yellow": "#9A5E00",
+      "purple": "#6A3FC0",
+      "magenta": "#B01E8E"
     },
     "dark": {
-      "blue": "#6FB6E0",
-      "teal": "#4FBFBB",
-      "green": "#4FC08D",
-      "yellow": "#E5A93C",
-      "purple": "#B396E8"
+      "blue": "#7FA8FF",
+      "cyan": "#4FC3DD",
+      "teal": "#45C99A",
+      "green": "#A5D24A",
+      "yellow": "#F0AE4A",
+      "purple": "#B98CFF",
+      "magenta": "#F07FD0"
     }
   },
-  "terminalBright": {
-    "note": "Derived one step per supporting hue so all 16 ANSI slots can be filled with readable colours. Light-mode brights go deeper (a lighter 'bright' is unreadable on an Oat background); dark-mode brights go lighter.",
+  "deep": {
+    "note": "Darker steps used in the light variant wherever a hue sits on the Oat Medium secondary surface (side bar, panel) instead of the Oat Light editor background — the base hues clear 4.5:1 on the editor background but some do not on the surface. In the dark variant the base hues already clear it, so `deep` mirrors `supporting.dark`.",
     "light": {
-      "blue": "#12507A",
-      "teal": "#075858",
-      "green": "#0A583B",
-      "yellow": "#5F3E00",
-      "purple": "#4E3A7C"
+      "blue": "#0F4A9E",
+      "cyan": "#08596B",
+      "teal": "#075843",
+      "green": "#2A5800",
+      "yellow": "#6B4100",
+      "purple": "#4A2A8C",
+      "magenta": "#7D1463"
     },
     "dark": {
-      "blue": "#9BD0EE",
-      "teal": "#7FD6D3",
-      "green": "#86D9B1",
-      "yellow": "#F0C570",
-      "purple": "#CDBBF1"
+      "blue": "#7FA8FF",
+      "cyan": "#4FC3DD",
+      "teal": "#45C99A",
+      "green": "#A5D24A",
+      "yellow": "#F0AE4A",
+      "purple": "#B98CFF",
+      "magenta": "#F07FD0"
+    }
+  },
+  "bright": {
+    "note": "Terminal 'bright' ANSI steps. Light-mode brights go deeper (a lighter bright-green is unreadable on an Oat background), so they reuse the `deep` ramp; dark-mode brights go lighter.",
+    "light": {
+      "blue": "#0F4A9E",
+      "cyan": "#08596B",
+      "teal": "#075843",
+      "green": "#2A5800",
+      "yellow": "#6B4100",
+      "purple": "#4A2A8C",
+      "magenta": "#7D1463"
+    },
+    "dark": {
+      "blue": "#A9C6FF",
+      "cyan": "#8FDCEE",
+      "teal": "#7EDCB8",
+      "green": "#C6E585",
+      "yellow": "#F7C97F",
+      "purple": "#D2B6FF",
+      "magenta": "#F7AEE0"
     }
   },
   "roles": {
@@ -109,11 +138,33 @@
       "statusBarDebugging": "lava700",
       "buttonBackground": "lava700",
       "buttonForeground": "oatWhite",
-      "bracketPairCycle": ["lava", "blue", "teal", "purple", "green", "yellow"]
+      "bracketPairCycle": ["lava", "blue", "teal", "purple", "green", "yellow"],
+      "lavaOnly": [
+        "focusBorder",
+        "editorCursor.foreground",
+        "tab.activeBorderTop",
+        "activityBar.activeBorder",
+        "badge.background",
+        "progressBar.background",
+        "errors"
+      ]
+    },
+    "syntax": {
+      "note": "Which hue carries which syntactic role, in both variants.",
+      "strings": "green",
+      "numbers, constants, enum members, attributes": "yellow",
+      "keywords, control flow, storage, language constants": "purple",
+      "functions, methods": "blue",
+      "classes, types, interfaces, enums, structs, namespaces": "teal",
+      "properties, object keys, JSON/YAML keys, tags": "cyan",
+      "parameters": "cyan italic",
+      "variables": "magenta",
+      "operators, punctuation, comments": "navy",
+      "decorators, Markdown headings, invalid, deleted diff": "lava"
     }
   },
   "alpha": {
-    "note": "Alpha suffixes used for translucent layers, so selection, find match and word highlight stack legibly.",
+    "note": "Alpha suffixes used for translucent layers, so selection, find match, word highlight and the tinted UI surfaces stack legibly.",
     "selection": "80",
     "selectionInactive": "4D",
     "selectionHighlight": "59",
@@ -122,6 +173,9 @@
     "wordHighlight": "26",
     "rangeHighlight": "33",
     "diffText": "26",
-    "diffLine": "19"
+    "diffLine": "19",
+    "surfaceTint": "1A",
+    "selectionTint": "33",
+    "selectionTintStrong": "40"
   }
 }
