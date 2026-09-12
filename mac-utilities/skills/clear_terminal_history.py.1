@@ -1,0 +1,270 @@
+.TH CLEAR_TERMINAL_HISTORY.PY 1 "2026-09-12" "2.0.0" "User Commands"
+.SH NAME
+clear_terminal_history.py \- inspect, audit and clear shell history, carefully
+.SH SYNOPSIS
+.B python3 clear_terminal_history.py
+[\fIOPTIONS\fR]
+.SH DESCRIPTION
+.B clear_terminal_history.py
+(HistClean) finds the history files your shells and REPLs actually use, shows
+what is in them, flags entries that look like leaked credentials, and removes
+entries either wholesale or one pattern at a time — taking a compressed 0600
+backup before it changes anything.
+.PP
+With no action flag it opens an interactive menu.
+.PP
+.B $HISTFILE
+and
+.B $ZDOTDIR
+are honoured before the conventional paths. A tool that clears
+.I ~/.zsh_history
+while the shell writes somewhere else is worse than useless: it reports success
+having deleted nothing.
+.SH OPTIONS
+.SS Actions
+.TP
+.B \-\-list
+List the history files found, with entry counts, sizes, permissions and the
+path each one was resolved from.
+.TP
+.B \-\-show
+Show the most recent entries, one line each, with credential values masked.
+See
+.BR \-\-limit .
+.TP
+.B \-\-stats
+Entry count, unique ratio, date span, credential count and the most-used
+commands.
+.TP
+.B \-\-scan
+Report entries that look like leaked credentials. Exits 3 if any are found.
+.TP
+.B \-\-dedupe
+Remove duplicate commands, keeping the most recent occurrence of each.
+.TP
+.BI \-\-redact " PATTERN " [ PATTERN " ...]"
+Remove entries containing any of these substrings, case-insensitively. With
+.B \-\-regex
+the patterns are treated as regular expressions instead.
+.TP
+.B \-\-redact\-secrets
+Remove every entry
+.B \-\-scan
+would flag.
+.TP
+.B \-\-clear
+Empty the selected history files. Confirmation requires typing
+.B yes
+in full.
+.TP
+.B \-\-fix\-perms
+Set mode 0600 on any history file other users can read.
+.TP
+.B \-\-backups
+List the backups taken before previous changes.
+.TP
+.BI \-\-restore " [ARCHIVE]"
+Restore a backup, byte for byte. Prompts for which one when no archive is
+named. The file being replaced is itself backed up first.
+.SS Targets
+.TP
+.BI \-\-files " LABEL " [ LABEL " ...]"
+Which histories to act on:
+.BR zsh ", " bash ", " fish ", " python ", " node ", " sqlite ", " psql ,
+.BR mysql ", " redis ", " irb ", " less ", or " all .
+.TP
+.B \-\-tools
+Include REPL and client histories even for destructive actions.
+.PP
+With no
+.BR \-\-files ,
+read-only actions cover every history file that exists — a scanner that
+silently skips
+.I ~/.psql_history
+is worse than useless — while actions that delete default to the shells alone
+and say which tool histories they left out.
+.SS Safety
+.TP
+.BR \-y ", " \-\-yes
+Do not prompt for confirmation. Required for any destructive action in a
+non-interactive session; without it the tool exits 1 rather than proceeding
+unasked.
+.TP
+.B \-\-dry\-run
+Report what would change without writing anything.
+.TP
+.B \-\-no\-backup
+Do not take a backup before changing a file. Without this flag, a change whose
+backup fails is skipped rather than done blind.
+.TP
+.B \-\-shred
+Overwrite the file's bytes with random data before clearing it. On APFS, or any
+SSD, copy-on-write and wear levelling mean the old blocks may still exist; the
+tool says so rather than promising an erase it cannot deliver.
+.SS Output
+.TP
+.BI \-\-limit " N"
+How many entries or findings to display. Default is
+.BR 20 .
+.TP
+.B \-\-regex
+Treat
+.B \-\-redact
+patterns as regular expressions.
+.TP
+.B \-\-show\-secrets
+Print matched credentials in full instead of masking them. Off by default: a
+tool that prints your secrets in order to tell you they leaked has leaked them
+again, into your scrollback.
+.TP
+.BI \-\-color " auto|always|never"
+Force or suppress ANSI color. Default
+.B auto
+respects
+.BR NO_COLOR ,
+.BR TERM=dumb ,
+and whether stdout is a terminal.
+.TP
+.B \-\-ascii
+ASCII-only output: no box-drawing characters and no emoji.
+.TP
+.BR \-q ", " \-\-quiet
+Print only warnings and errors.
+.TP
+.B \-\-json
+Emit a machine-readable report to stdout; the human-readable UI moves to stderr
+so stdout stays parseable.
+.TP
+.B \-\-version
+Print the version and exit.
+.SH EXIT STATUS
+.TP
+.B 0
+Success — nothing to do, or everything applied.
+.TP
+.B 1
+Fatal error (unknown history label, a destructive action in a non-interactive
+session without \-y, no backup to restore).
+.TP
+.B 2
+Run completed but one or more files could not be changed.
+.TP
+.B 3
+.B \-\-scan
+found credential-shaped entries.
+.TP
+.B 130
+Interrupted with Ctrl-C or SIGTERM.
+.SH FEATURES
+.SS Removal Preserves Every Surviving Byte
+Entries are parsed keeping the exact bytes they came from, and a rewrite emits
+those bytes back verbatim. zsh extended timestamps, multi-line continuation
+entries and non-UTF-8 bytes all survive a redaction untouched; only the entries
+you asked to remove go.
+.SS Credential Scanning
+Seventeen rules cover AWS access and secret keys, GitHub, Slack, Google,
+Anthropic and OpenAI tokens, JWTs, private-key headers, passwords embedded in
+URLs, Authorization headers,
+.BR "curl -u" ,
+.BR "mysql -p" ,
+.BR PGPASSWORD ,
+.BR "ssh-keygen -N" ,
+base64 payloads, and generic SOMETHING_TOKEN=value assignments. Values are
+masked unless
+.B \-\-show\-secrets
+is given. Removing the entry does not un-leak the secret — rotate it.
+.SS Backups Before Anything Destructive
+Every destructive action first writes a gzipped copy to
+.I ~/.histclean_backups/<label>_<timestamp>.gz
+(mode 0600, in a 0700 directory), keeping the ten newest per file.
+.SS The Shell That Undoes Your Work
+A cleared file is refilled by any shell still holding that history in memory:
+close the terminal and it writes its copy back over the top. After any content
+change the tool says so and gives the per-shell incantation —
+.B "HISTSIZE=0; HISTSIZE=10000"
+for zsh,
+.B "history -c"
+for bash,
+.B "history clear"
+for fish — and notes that closing the other terminals first is the surest
+route.
+.SS Permission Auditing
+History files are private by definition.
+.B \-\-list
+flags any that others can read;
+.B \-\-fix\-perms
+sets them to 0600.
+.SH EXAMPLES
+.TP
+What exists, how big, and who can read it:
+.EX
+python3 clear_terminal_history.py --list
+.EE
+.TP
+Audit every history on the machine for leaked credentials:
+.EX
+python3 clear_terminal_history.py --scan
+.EE
+.TP
+Remove the entries it flagged:
+.EX
+python3 clear_terminal_history.py --redact-secrets
+.EE
+.TP
+Forget every command mentioning a particular token:
+.EX
+python3 clear_terminal_history.py --redact 'ghp_abc123' --files zsh
+.EE
+.TP
+Regex removal, previewed first:
+.EX
+python3 clear_terminal_history.py --redact 'export \\w+_TOKEN=' --regex --dry-run
+.EE
+.TP
+Empty zsh history, overwriting the bytes first:
+.EX
+python3 clear_terminal_history.py --clear --files zsh --shred
+.EE
+.TP
+Undo the last change:
+.EX
+python3 clear_terminal_history.py --backups
+python3 clear_terminal_history.py --restore zsh_20260912_103843.gz
+.EE
+.TP
+Feed an audit into something else:
+.EX
+python3 clear_terminal_history.py --json | jq '.files[] | select(.findings | length > 0)'
+.EE
+.SH FILES
+.TP
+.I ~/.histclean.log
+Timestamped log of every run. Mode 0600, rotated at 1 MB with 2 generations.
+.TP
+.I ~/.histclean_backups/
+Gzipped backups taken before each change. Directory 0700, files 0600.
+.SH ENVIRONMENT
+.TP
+.B HISTFILE
+Consulted first for the shell named by
+.BR $SHELL .
+.TP
+.B ZDOTDIR
+Consulted for the zsh history location.
+.TP
+.B XDG_DATA_HOME
+Consulted for the fish history location.
+.TP
+.B NO_COLOR
+When set, disables color under
+.BR "\-\-color auto" .
+.SH REQUIREMENTS
+Python 3.10 or later, standard library only. Paths and defaults are tuned for
+macOS.
+.SH AUTHOR
+Anirban Bagchi
+.SH SEE ALSO
+.BR zshbuiltins (1),
+.BR history (3),
+.BR brewmaster.py (1),
+.BR PakMan.py (1)

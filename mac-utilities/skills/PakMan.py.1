@@ -1,26 +1,41 @@
-.TH PAKMAN.PY 1 "2026-07-03" "2.0.0" "User Commands"
+.TH PAKMAN.PY 1 "2026-09-12" "3.0.0" "User Commands"
 .SH NAME
-PakMan.py \- a robust Python package updater with batch upgrades, rollback, and logging
+PakMan.py \- a graphical, fast, careful Python package updater
 .SH SYNOPSIS
 .B python3 PakMan.py
 [\fIOPTIONS\fR]
 .SH DESCRIPTION
 .B PakMan.py
-wraps
-.B pip
-to upgrade outdated Python packages. It tries a single batch upgrade first
-(one resolver run), falling back to per-package upgrades with retries and
-timeouts to isolate failures. Before upgrading it writes a rollback snapshot;
-after upgrading it verifies the dependency graph with
-.BR "pip check" .
-Every run is logged to
-.IR ~/.pakman.log .
+upgrades the outdated Python packages of the interpreter that runs it. It
+renders the outdated list as a box\-drawn table, attempts a single batch
+resolver run before falling back to isolated per\-package upgrades, writes a
+rollback snapshot first, distinguishes dependency conflicts it introduced from
+ones that were already there, refuses to run twice at once, and audits every
+subprocess to
+.I ~/.pakman.log\c
+\&.
 .PP
-If
-.B uv
-is installed, the outdated check uses it for a much faster query, falling
-back to pip automatically on any error.
+To update a virtual environment, invoke PakMan with that environment's
+interpreter:
+.RS
+.EX
+~/projects/api/.venv/bin/python PakMan.py -y
+.EE
+.RE
+.PP
+Column arithmetic is done in terminal columns rather than characters: emoji and
+CJK text are double\-width, while combining marks, variation selectors and
+joiners take no space at all. Borders line up whatever a package name contains,
+and truncation never splits a double\-width character in half.
+.PP
+All presentation degrades on its own. A non\-TTY output stream, the
+.B NO_COLOR
+environment variable,
+.B TERM=dumb
+or a non\-UTF\-8 stream independently drop color, the live progress line, or
+box\-drawing characters; the content is never lost.
 .SH OPTIONS
+.SS Selection
 .TP
 .BR \-y ", " \-\-yes
 Auto-approve all upgrades without an interactive prompt.
@@ -28,7 +43,7 @@ Mutually exclusive with
 .BR \-\-interactive .
 .TP
 .BR \-i ", " \-\-interactive
-Show a numbered list and choose which packages to upgrade. Accepts
+Show a numbered table and choose which packages to upgrade. Accepts
 selections like
 .BR 1,3,5\-7 ,
 .BR all ,
@@ -36,59 +51,53 @@ or
 .BR none .
 Selection implies consent; no second confirmation prompt is shown.
 .TP
-.B \-\-check\-only
-List outdated packages with version info and exit without upgrading.
-Exits with status 3 if any outdated packages were found.
-.TP
-.B \-\-dry\-run
-Print every command that would be executed without running any of them.
-Skips the confirmation prompt automatically.
-.TP
 .BI \-\-exclude " PKG " [ PKG " ...]"
-Space-separated list of package names to skip. Matching is case-insensitive
-and glob patterns are supported:
+Packages to skip. Case-insensitive glob patterns are supported:
 .RS
 .EX
-python3 PakMan.py --exclude 'boto*' setuptools
+python3 PakMan.py --exclude 'boto*' numpy
 .EE
 .RE
 .TP
 .BI \-\-only " PKG " [ PKG " ...]"
-Upgrade only the listed packages. Case-insensitive, glob patterns supported.
-Specifying the same name in both
+Upgrade only packages matching these names or globs, case-insensitively. A name
+may not appear in both
 .B \-\-only
 and
-.B \-\-exclude
-is an error.
+.BR \-\-exclude .
+.SS Behaviour
+.TP
+.B \-\-check\-only
+List outdated packages and exit without upgrading. Exits with status 3 if any
+were found.
+.TP
+.B \-\-dry\-run
+Print every command that would be executed without running any of them.
+Skips the confirmation prompt and the instance lock.
 .TP
 .B \-\-upgrade\-pip
-Upgrade
-.B pip
-itself before upgrading any other packages.
+Upgrade pip itself before upgrading packages. A failure here is reported and
+the run continues; the pip already installed can still do the work.
 .TP
 .B \-\-pre
-Allow installation of pre-release versions.
+Include pre-release versions when upgrading.
 .TP
 .B \-\-only\-binary
-Pass
+Refuse source distributions by passing
 .B \-\-only\-binary=:all:
-to pip, refusing source distributions. Installing an sdist executes its
-build code; wheels do not — this flag guarantees no package code runs at
-install time.
+to the installer, so no sdist build code executes.
 .TP
 .B \-\-require\-venv
-Refuse to run outside a virtual environment (exit 1). Without this flag a
-prominent warning is printed instead.
+Refuse to run outside a virtual environment (exit 1). Without it, running
+against a global interpreter prints a warning naming the interpreter, plus a
+further warning if the interpreter is marked externally managed (PEP 668).
 .TP
 .B \-\-audit
-After upgrading, scan the environment for known vulnerabilities with
-.BR pip-audit .
-Skipped with a hint if pip-audit is not installed.
-.TP
-.B \-\-no\-uv
-Use pip for the outdated check even if
-.B uv
-is installed.
+Run
+.B pip-audit
+after upgrading. Its absence is detected with
+.B pip show
+and reported, not treated as a failure.
 .TP
 .B \-\-no\-rollback
 Skip writing the rollback snapshot file.
@@ -96,47 +105,110 @@ Skip writing the rollback snapshot file.
 .B \-\-no\-batch
 Skip the batch upgrade attempt and go straight to per-package upgrades.
 .TP
+.B \-\-no\-lock
+Allow concurrent runs by skipping the single-instance lock.
+.TP
+.B \-\-no\-config
+Ignore
+.IR ~/.pakmanrc.json .
+.TP
 .BI \-\-export " FILE"
-After all upgrades complete, run
+Run
 .B pip freeze
-and write the output to
-.IR FILE .
-If the freeze command fails, a warning is printed and no file is written.
+after upgrading and write the result to FILE.
 .TP
 .B \-\-notify
 Send a native macOS notification (via
 .BR osascript )
 when the run completes. Notification text is escaped to prevent AppleScript
 injection.
+.SS Performance
 .TP
-.B \-\-json
-Print the outdated package list as a JSON array and exit. No upgrades are
-performed.
+.B \-\-uv
+Use
+.B uv
+for the installs as well as the outdated check. Typically several times faster
+than pip. Requires uv on PATH; if it is missing, PakMan warns and uses pip.
 .TP
-.B \-\-log\-json
-Append one structured JSON record per run (upgraded packages, failures,
-dependency conflicts, elapsed time, exit code) to
-.IR ~/.pakman_history.jsonl .
+.B \-\-no\-uv
+Do not use uv at all, even if it is installed. By default uv is used for the
+outdated check whenever it is present.
+.TP
+.BI \-\-jobs " N"
+Number of parallel wheel-prefetch workers, 1 to 16. Default is
+.BR 6 .
+.TP
+.B \-\-no\-prefetch
+Do not pre-download wheels in parallel.
 .TP
 .BI \-\-retries " N"
-Number of retry attempts per package on the fallback path. Default is
+Number of attempts per package before it is marked failed. Retries use
+exponential backoff. Default is
 .BR 2 ,
 minimum is
 .BR 1 .
+Errors that cannot succeed on a retry are never retried.
 .TP
 .BI \-\-timeout " SECS"
-Timeout per package in seconds; the batch attempt gets timeout multiplied by
-the package count. Default is
+Timeout per package in seconds; the batch attempt is allowed this many seconds
+times the package count. Default is
 .BR 600 .
-A package stuck building from source becomes a recorded failure instead of
-hanging the run.
+.SS Output
+.TP
+.BI \-\-color " auto|always|never"
+Force or suppress ANSI color. Default
+.B auto
+respects
+.BR NO_COLOR ,
+.BR TERM=dumb ,
+and whether stdout is a terminal.
+.TP
+.B \-\-ascii
+ASCII-only output: no box-drawing characters and no emoji.
+.TP
+.BR \-q ", " \-\-quiet
+Print only warnings and errors. Mutually exclusive with
+.BR \-\-interactive .
+.TP
+.BR \-v ", " \-\-verbose
+Stream raw pip output instead of progress indicators.
+.TP
+.B \-\-json
+Print the outdated package list as JSON to stdout and exit without upgrading.
+.TP
+.B \-\-summary\-json
+Print a machine-readable summary of the completed run to stdout. Distinct from
+.BR \-\-json ,
+which reports what is outdated and exits. Both move the human-readable UI to
+stderr so stdout stays parseable.
+.TP
+.B \-\-log\-json
+Append one structured JSON record per run (upgraded, failures, excluded,
+conflicts, new conflicts, rollback path, installer, elapsed, exit code) to
+.IR ~/.pakman_history.jsonl .
+The file is trimmed to the newest 500 records.
+.TP
+.BI \-\-history " [N]"
+Print the last N recorded runs as a table and exit. Default is
+.BR 15 .
+.TP
+.B \-\-rollbacks
+List the rollback snapshots on disk, newest first, and exit.
+.TP
+.B \-\-version
+Print the version and exit.
 .SH EXIT STATUS
 .TP
 .B 0
-Success — nothing to do, or all upgrades succeeded.
+Success — nothing to do, or all upgrades succeeded. A run that introduces new
+dependency conflicts still exits 0: no package failed. The conflicts are
+reported in the summary, the log, and the JSON record.
 .TP
 .B 1
-Fatal error (non-TTY without \-y, \-\-require\-venv outside a venv, ...).
+Fatal error (non-interactive session without \-y,
+.B \-\-require\-venv
+outside a venv, another run holds the lock, the outdated list could not be
+read).
 .TP
 .B 2
 Run completed but one or more packages failed.
@@ -146,52 +218,81 @@ Run completed but one or more packages failed.
 found outdated packages.
 .TP
 .B 130
-Interrupted with Ctrl-C.
+Interrupted with Ctrl-C or SIGTERM.
 .SH FEATURES
+.SS New versus Pre-existing Conflicts
+A
+.B pip check
+baseline is taken before the upgrades — concurrently with the outdated query,
+so it costs nothing — and compared against a
+.B pip check
+afterwards. Only conflicts the run introduced are reported as such, with a
+pointer to the rollback file that undoes them; pre-existing conflicts the run
+happened to resolve are reported separately.
 .SS Batch Upgrade with Per-Package Fallback
-All packages are first upgraded in a single
-.B pip install --upgrade
-call — one resolver run instead of N. Only if the batch fails does PakMan
-fall back to per-package upgrades (with parallel wheel prefetch) to isolate
-the failure. Note that a batch resolver run may choose a version other than
-the newest if a newer version conflicts with another package's requirements;
-the post-run
-.B pip check
-covers this.
-.SS Rollback Snapshot
-Before upgrading, current versions are written as
-.I pkg==version
-lines to
-.IR ~/.pakman_rollback_YYYYMMDD_HHMMSS.txt .
-Undo an entire run with:
-.RS
-.EX
-pip install -r ~/.pakman_rollback_<timestamp>.txt
-.EE
-.RE
-The five newest snapshots are kept; older ones are pruned.
-.SS Dependency Health Check
-.B pip check
-runs automatically after every upgrade and surfaces broken dependency graphs
-in the output, the log, and the JSON history.
+Everything is first attempted in one resolver run, which is dramatically faster
+than N runs and the only way the resolver can satisfy packages that constrain
+each other. If the batch fails, each package is upgraded individually so a
+single bad package cannot block the rest.
+.SS Pipelined Parallel Prefetch
+On the per-package path, wheels download on a thread pool while installs run.
+Downloads are submitted in install order and the install loop waits only on the
+package it is about to install, so the download of package N+1 overlaps the
+installation of package N. Skipped under
+.B \-\-uv
+because uv resolves and downloads in parallel already.
+.SS Single-Instance Lock
+An flock on
+.I ~/.pakman.lock
+refuses to start a second run while one is in progress: two pip processes
+writing the same site-packages is the classic way to end up with a
+half-installed distribution. If the lock file cannot be created at all, the run
+continues with a warning rather than refusing.
+.SS Rollback Snapshots
+Current versions are pinned to
+.I ~/.pakman_rollback_YYYYMMDD_HHMMSS.txt
+before anything is upgraded. Undo a run with
+.BR "pip install -r <file>" ;
+.B \-\-rollbacks
+lists what is available.
 .SS Security Hardening
 Package names are validated against PEP 508 naming rules before reaching any
-subprocess. The log file is created with mode 0600. Every pip invocation
-writes an AUDIT line with the exact command and exit code. Pip's own version
-self-check is disabled on every call.
+subprocess. Log, history, lock and rollback files are created mode 0600, and
+the log rotates at 2 MB keeping 3 generations. Subprocesses inherit no stdin
+and run with
+.BR PIP_NO_INPUT=1 ,
+so pip never stops to ask a question there is nothing to answer with. Every
+subprocess call writes an AUDIT line with the exact shell-quoted command, exit
+code, and duration to the log.
 .SS Clean Interrupts and Cron Safety
-Ctrl-C mid-upgrade prints how many packages were upgraded, failed, and not
-attempted, then exits 130. In a non-TTY session without
+Ctrl-C or SIGTERM mid-upgrade prints how many packages were upgraded, failed,
+and not attempted, cancels pending downloads, then exits 130. In a non-TTY
+session without
 .BR \-y ,
 the tool exits 1 immediately instead of hanging on the prompt.
+.SH CONFIGURATION
+.I ~/.pakmanrc.json
+supplies defaults for any of
+.BR exclude ", " only ", " pre ", " only_binary ", " require_venv ", " audit ,
+.BR no_uv ", " uv ", " no_rollback ", " no_batch ", " notify ", " jobs ,
+.BR retries ", " timeout ", " log_json ", " color ", " ascii ", and " export .
+Command-line flags override it; unknown or mistyped keys warn and are ignored.
+.PP
+.EX
+{
+  "exclude": ["boto*", "awscli"],
+  "uv": true,
+  "log_json": true
+}
+.EE
 .SH EXAMPLES
 .TP
-Standard interactive upgrade:
+Interactive upgrade (default):
 .EX
 python3 PakMan.py
 .EE
 .TP
-Pick packages from a numbered list:
+Pick packages from a numbered table:
 .EX
 python3 PakMan.py -i
 .EE
@@ -201,62 +302,101 @@ Auto-approve, skip all boto packages, notify:
 python3 PakMan.py -y --exclude 'boto*' --notify
 .EE
 .TP
-Wheels only — never execute sdist build code:
+Let uv do the installs as well as the outdated check:
 .EX
-python3 PakMan.py --only-binary -y
+python3 PakMan.py -y --uv
 .EE
 .TP
-Refuse to touch global site-packages:
+Preview outdated packages (exit 3 if any found):
 .EX
-python3 PakMan.py --require-venv -y
+python3 PakMan.py --check-only
 .EE
 .TP
-Upgrade, then scan for known vulnerabilities:
+Update a specific virtualenv:
 .EX
-python3 PakMan.py -y --audit
+~/projects/api/.venv/bin/python PakMan.py -y
 .EE
 .TP
-Upgrade pip first, then everything, export freeze when done:
+Refuse to touch anything outside a venv, and refuse source builds:
 .EX
-python3 PakMan.py --upgrade-pip -y --export requirements.txt
+python3 PakMan.py --require-venv --only-binary -y
+.EE
+.TP
+Upgrade, then audit and export a freeze:
+.EX
+python3 PakMan.py -y --audit --export requirements.lock
 .EE
 .TP
 Cron-friendly run with JSON history:
 .EX
-python3 PakMan.py -y --log-json --no-rollback
+python3 PakMan.py -y -q --log-json
+.EE
+.TP
+Feed the outdated list to another tool:
+.EX
+python3 PakMan.py --json | jq -r '.[].name'
+.EE
+.TP
+Feed the run result to another tool:
+.EX
+python3 PakMan.py -y --summary-json | jq '.new_conflicts'
+.EE
+.TP
+Review recent runs and available rollbacks:
+.EX
+python3 PakMan.py --history 30
+python3 PakMan.py --rollbacks
 .EE
 .SH FILES
 .TP
 .I ~/.pakman.log
-Timestamped log of all runs with per-command AUDIT lines. Mode 0600.
+Timestamped log of all runs with per-command AUDIT lines. Mode 0600, rotated
+at 2 MB with 3 generations kept.
 .TP
 .I ~/.pakman_history.jsonl
 One JSON record per run when
 .B \-\-log\-json
-is set. Mode 0600.
+is set, trimmed to the newest 500. Mode 0600.
+.TP
+.I ~/.pakman.lock
+Single-instance lock held for the duration of a run. Mode 0600.
+.TP
+.I ~/.pakmanrc.json
+Optional defaults for command-line flags.
 .TP
 .I ~/.pakman_rollback_YYYYMMDD_HHMMSS.txt
-Pre-upgrade version snapshots; the five newest are kept.
+Version snapshot written before upgrading; the five newest are kept. Restore
+with
+.BR "pip install -r <file>" .
+Mode 0600.
+.SH ENVIRONMENT
+.TP
+.B NO_COLOR
+When set, disables color under
+.BR "\-\-color auto" .
+.TP
+.B TERM
+.B dumb
+or unset disables color and the live progress line under
+.BR "\-\-color auto" .
 .SH REQUIREMENTS
-Python 3.10 or later.
-.B pip
-must be available for the active interpreter
-.RB ( "python \-m pip" ).
+Python 3.10 or later (standard library only) with pip available as
+.BR "python -m pip" .
 .PP
+.B uv
+(\fIhttps://github.com/astral\-sh/uv\fR) is optional: used for the outdated
+check when present, and for installs with
+.BR \-\-uv .
+.B pip-audit
+is optional, for
+.BR \-\-audit .
 The
 .B \-\-notify
 flag requires
 .B osascript
 (available by default on macOS).
-.PP
-Optional:
-.B uv
-for fast outdated checks,
-.B pip-audit
-for
-.BR \-\-audit .
 .SH AUTHOR
 Anirban Bagchi
 .SH SEE ALSO
 .BR pip (1),
-.BR python3 (1)
+.BR brewmaster.py (1)

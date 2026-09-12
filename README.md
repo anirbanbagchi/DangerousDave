@@ -42,25 +42,50 @@ macOS productivity scripts. Each tool has full docs under `mac-utilities/skills/
 
 | Tool | Description |
 | --- | --- |
-| [`brewmaster.py`](mac-utilities/brewmaster.py) | Homebrew upgrader — version diffs, per-package retries, pin awareness, bundle backup, macOS notifications |
-| [`PakMan.py`](mac-utilities/PakMan.py) | Python package upgrader — per-package retries, outdated table, freeze export, macOS notifications |
+| [`brewmaster.py`](mac-utilities/brewmaster.py) | Homebrew upgrader — boxed tables, live progress, pipelined parallel downloads, per-package retries, pin awareness, bundle backup, instance lock |
+| [`PakMan.py`](mac-utilities/PakMan.py) | Python package upgrader — batch resolve with per-package fallback, optional `uv` installs, rollback snapshots, new-vs-pre-existing conflict detection |
+| [`clear_terminal_history.py`](mac-utilities/clear_terminal_history.py) | Shell history inspector and cleaner — credential scanning, pattern redaction, gzipped backups, permission auditing |
 | [`all_aliases.py`](mac-utilities/all_aliases.py) | Shell alias management |
 | [`all_python.py`](mac-utilities/all_python.py) | Python environment utilities |
 | [`drive_size.py`](mac-utilities/drive_size.py) | Disk usage reporter |
 | [`paths.py`](mac-utilities/paths.py) | PATH inspection and repair |
-| [`clear_terminal_history.py`](mac-utilities/clear_terminal_history.py) | Terminal history cleaner |
 
-### Quick start — BrewMaster
+The first three share a common design: a graphical terminal UI that degrades on
+its own (no TTY, `NO_COLOR`, `TERM=dumb` and non-UTF-8 streams each drop only
+what they must), `--dry-run` on anything destructive, backups before changes,
+an `AUDIT:` line per subprocess in a `0600` log, and one exit-code contract.
+
+| Code | Meaning |
+| --- | --- |
+| `0` | Success — nothing to do, or everything applied |
+| `1` | Fatal error |
+| `2` | Completed, but one or more items failed |
+| `3` | Something was *found* — outdated packages, or leaked credentials |
+| `130` | Interrupted (Ctrl-C or SIGTERM) |
+
+That makes `3` the useful one in cron: it means "there is something to look at",
+not "this broke".
+
+### Quick start
 
 ```bash
-# Check what's outdated (no changes made)
+# What Homebrew packages are outdated? (read-only, exit 3 if any)
 python3 mac-utilities/brewmaster.py --check-only
 
-# Full upgrade with backup and macOS notification
+# Upgrade everything, with a Brewfile backup and a notification when done
 python3 mac-utilities/brewmaster.py --backup --notify -y
+
+# Upgrade Python packages, using uv for the installs when it is available
+python3 mac-utilities/PakMan.py -y --uv
+
+# Audit every shell and REPL history for leaked credentials (values masked)
+python3 mac-utilities/clear_terminal_history.py --scan
 ```
 
-See [`mac-utilities/skills/brewmaster.md`](mac-utilities/skills/brewmaster.md) for all options.
+Full docs per tool: [`brewmaster.md`](mac-utilities/skills/brewmaster.md) ·
+[`PakMan.md`](mac-utilities/skills/PakMan.md) ·
+[`clear_terminal_history.md`](mac-utilities/skills/clear_terminal_history.md).
+Man pages install with `bash mac-utilities/skills/install_man.sh`.
 
 ---
 

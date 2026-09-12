@@ -1,29 +1,43 @@
-.TH BREWMASTER.PY 1 "2026-07-03" "2.0.0" "User Commands"
+.TH BREWMASTER.PY 1 "2026-09-12" "3.0.0" "User Commands"
 .SH NAME
-brewmaster.py \- a smarter Homebrew upgrader with prefetch, retries, and logging
+brewmaster.py \- a graphical, fast, careful Homebrew upgrader
 .SH SYNOPSIS
 .B python3 brewmaster.py
 [\fIOPTIONS\fR]
 .SH DESCRIPTION
 .B brewmaster.py
-is an enhanced Homebrew upgrade wrapper that shows version diffs, prefetches
-all downloads in parallel, retries failed packages individually with timeouts,
-skips pinned packages, supports interactive per-package selection, and logs
-every run to
+is an enhanced Homebrew upgrade wrapper. It renders outdated packages as a
+box\-drawn table with version diffs, pipelines parallel downloads against
+sequential installs, retries failed packages individually with timeouts and
+backoff, skips pinned packages, supports interactive per\-package selection,
+refuses to run twice at once, and audits every subprocess to
 .I ~/.brewmaster.log\c
 \&.
 .PP
 Running without flags performs an interactive upgrade: it updates Homebrew
 metadata (skipped automatically if updated within the last hour), lists all
-outdated packages with version diffs, prompts for confirmation, prefetches
-downloads in parallel, then upgrades each package individually — retrying
-failures before reporting a summary.
+outdated packages with version diffs, prompts for confirmation, then upgrades
+each package individually behind a live progress bar while the next packages
+download in the background — retrying failures before reporting a summary.
+.PP
+Column arithmetic is done in terminal columns rather than characters: emoji and
+CJK text are double\-width, while combining marks, variation selectors and
+joiners take no space at all. Borders line up whatever a package name contains,
+and truncation never splits a double\-width character in half.
+.PP
+All presentation degrades on its own. A non\-TTY output stream, the
+.B NO_COLOR
+environment variable,
+.B TERM=dumb
+or a non\-UTF\-8 stream independently drop color, the live progress line, or
+box\-drawing characters; the content is never lost.
 .PP
 The
 .B brew
 executable is resolved once to an absolute path; a warning is printed if it
 lives outside the standard Homebrew locations.
 .SH OPTIONS
+.SS Selection
 .TP
 .BR \-y ", " \-\-yes
 Auto-approve all upgrades without an interactive prompt.
@@ -31,27 +45,13 @@ Mutually exclusive with
 .BR \-\-interactive .
 .TP
 .BR \-i ", " \-\-interactive
-Show a numbered list and choose which packages to upgrade. Accepts
+Show a numbered table and choose which packages to upgrade. Accepts
 selections like
 .BR 1,3,5\-7 ,
 .BR all ,
 or
 .BR none .
 Selection implies consent; no second confirmation prompt is shown.
-.TP
-.BR \-\-greedy " (default)"
-Include auto-updating casks when checking for outdated packages.
-.TP
-.B \-\-no\-greedy
-Disable greedy cask checking.
-.TP
-.B \-\-check\-only
-Report outdated packages with version diffs and exit without upgrading.
-Exits with status 3 if any outdated packages were found.
-.TP
-.B \-\-dry\-run
-Print every command that would be executed without running any of them.
-Skips the confirmation prompt automatically.
 .TP
 .BI \-\-skip " PKG " [ PKG " ...]"
 Space-separated list of package names to exclude. Glob patterns are
@@ -61,6 +61,12 @@ supported via fnmatch:
 python3 brewmaster.py --skip node 'python@*'
 .EE
 .RE
+.TP
+.BI \-\-only " PKG " [ PKG " ...]"
+Upgrade only packages matching these names or globs. Everything else is
+reported as skipped.
+.B \-\-skip
+wins where the two overlap.
 .TP
 .B \-\-formula\-only
 Upgrade formulae only; skip all casks.
@@ -72,17 +78,26 @@ Upgrade casks only; skip all formulae.
 Mutually exclusive with
 .BR \-\-formula\-only .
 .TP
-.B \-\-notify
-Send a native macOS notification (via
-.BR osascript )
-when the run completes. Notification text is escaped to prevent AppleScript
-injection.
+.BR \-\-greedy " (default)"
+Include auto-updating casks when checking for outdated packages.
+.TP
+.B \-\-no\-greedy
+Disable greedy cask checking.
+.SS Behaviour
+.TP
+.B \-\-check\-only
+Report outdated packages with version diffs and exit without upgrading.
+Exits with status 3 if any outdated packages were found.
+.TP
+.B \-\-dry\-run
+Print every command that would be executed without running any of them.
+Skips the confirmation prompt and the instance lock.
 .TP
 .B \-\-backup
 Before upgrading, dump the current Homebrew state to a timestamped Brewfile at
-.IR ~/.brewmaster_backup_YYYYMMDD_HHMMSS.Brewfile .
-The five newest backups are kept; older ones are pruned. A failed dump prints
-a warning and writes nothing.
+.IR ~/.brewmaster_backup_YYYYMMDD_HHMMSS.Brewfile
+(mode 0600). The five newest backups are kept; older ones are pruned. A failed
+dump prints a warning and writes nothing.
 Restore with:
 .RS
 .EX
@@ -101,33 +116,98 @@ Run
 even if it already ran within the last hour. By default the update step is
 skipped when the Homebrew repository's FETCH_HEAD is less than an hour old.
 .TP
-.B \-\-sizes
-Prefetch all downloads before the confirmation prompt and display the total
-on-disk download size. Note: this downloads before you confirm.
+.B \-\-no\-cleanup
+Skip the
+.B brew cleanup
+step at the end of the run. Note that per-install cleanup is disabled during
+the run, so nothing is reclaimed at all.
 .TP
-.B \-\-log\-json
-Append one structured JSON record per run (upgraded packages, failures,
-elapsed time, exit code) to
-.IR ~/.brewmaster_history.jsonl .
+.B \-\-no\-lock
+Allow concurrent runs by skipping the single-instance lock.
+.TP
+.B \-\-no\-config
+Ignore
+.IR ~/.brewmasterrc.json .
+.TP
+.B \-\-notify
+Send a native macOS notification (via
+.BR osascript )
+when the run completes. Notification text is escaped to prevent AppleScript
+injection.
+.SS Performance
+.TP
+.BI \-\-jobs " N"
+Number of parallel download workers, 1 to 16. Default is
+.BR 6 .
+.TP
+.B \-\-no\-prefetch
+Do not pre-download at all; let each
+.B brew upgrade
+fetch its own files.
+.TP
+.B \-\-sizes
+Download everything up front and display per-package and total download sizes
+in the table before the confirmation prompt. Note: this downloads before you
+confirm.
 .TP
 .BI \-\-retries " N"
-Number of retry attempts per package when an upgrade fails or times out.
-Default is
+Number of attempts per package before it is marked failed. Retries use
+exponential backoff. Default is
 .BR 2 ,
 minimum is
 .BR 1 .
+Errors that cannot succeed on a retry are never retried.
 .TP
 .BI \-\-timeout " SECS"
 Timeout per package upgrade in seconds. Default is
 .BR 600 .
 A hung installer becomes a recorded failure instead of stalling the run.
+.SS Output
+.TP
+.BI \-\-color " auto|always|never"
+Force or suppress ANSI color. Default
+.B auto
+respects
+.BR NO_COLOR ,
+.BR TERM=dumb ,
+and whether stdout is a terminal.
+.TP
+.B \-\-ascii
+ASCII-only output: no box-drawing characters and no emoji.
+.TP
+.BR \-q ", " \-\-quiet
+Print only warnings and errors. Mutually exclusive with
+.BR \-\-interactive .
+.TP
+.BR \-v ", " \-\-verbose
+Stream raw brew output instead of progress indicators.
+.TP
+.B \-\-json
+Print a machine-readable JSON summary of the run to stdout; all human-readable
+output moves to stderr so the two never mix.
+.TP
+.B \-\-log\-json
+Append one structured JSON record per run (upgraded packages, failures,
+skipped count, elapsed time, bytes downloaded, space freed, exit code) to
+.IR ~/.brewmaster_history.jsonl .
+The file is trimmed to the newest 500 records.
+.TP
+.BI \-\-history " [N]"
+Print the last N recorded runs as a table and exit. Default is
+.BR 15 .
+.TP
+.B \-\-version
+Print the version and exit.
 .SH EXIT STATUS
 .TP
 .B 0
 Success — nothing to do, or all upgrades succeeded.
 .TP
 .B 1
-Fatal error (brew not found, non-interactive session without \-y, ...).
+Fatal error (brew not found, unreadable
+.BR "brew outdated" ,
+non-interactive session without \-y, another run holds the lock, insufficient
+disk space).
 .TP
 .B 2
 Run completed but one or more packages failed.
@@ -137,32 +217,76 @@ Run completed but one or more packages failed.
 found outdated packages.
 .TP
 .B 130
-Interrupted with Ctrl-C.
+Interrupted with Ctrl-C or SIGTERM.
 .SH FEATURES
-.SS Parallel Download Prefetch
-All bottles and casks are prefetched via
-.B brew fetch
-on a 4-worker thread pool before the sequential upgrade loop, so each
-.B brew upgrade
-hits the local cache.
+.SS Pipelined Parallel Downloads
+Downloads run on a thread pool while upgrades install, not merely before them.
+Fetches are submitted in upgrade order and the upgrade loop waits only on the
+future for the package it is about to install, so the download of package N+1
+overlaps the installation of package N.
+.SS Faster brew Calls
+Every brew subprocess runs with
+.B HOMEBREW_NO_AUTO_UPDATE=1
+and
+.BR HOMEBREW_NO_INSTALL_CLEANUP=1 .
+BrewMaster updates and cleans up once per run instead of letting Homebrew
+re-check and re-clean on every package.
+.B brew outdated
+and
+.B brew list --pinned
+are issued concurrently.
 .SS Smart Update Skipping
 .B brew update
 is skipped automatically when it ran within the last hour, saving the
 slowest step of most runs.
+.SS Single-Instance Lock
+An flock on
+.I ~/.brewmaster.lock
+refuses to start a second run while one is in progress, so overlapping cron
+jobs do not fight over Homebrew's own locks.
+.SS Graceful Degradation
+A failed
+.B brew update
+warns and continues against cached metadata; a failed
+.B brew cleanup
+warns after the upgrades have already succeeded; a failed prefetch is advisory
+because the upgrade will fetch the file itself. Only genuinely unrecoverable
+conditions exit 1.
+.SS Disk Space Check
+Free space on the Homebrew prefix is checked before upgrading. A run that
+cannot fit its queued downloads is refused; a tight one warns and proceeds.
 .SS Security Hardening
-Package names are validated against brew's naming alphabet before reaching
-any subprocess. The log file is created with mode 0600. Every upgrade attempt
-writes an AUDIT line with the exact command and exit code to the log.
+Package names are validated against brew's naming alphabet before reaching any
+subprocess. Log, history, lock and backup files are created mode 0600, and the
+log rotates at 2 MB keeping 3 generations. Subprocesses inherit no stdin, so a
+cask demanding an interactive password fails fast instead of hanging. Every
+subprocess call writes an AUDIT line with the exact shell-quoted command, exit
+code, and duration to the log.
 .SS Pin Awareness
 Reads
 .B brew list --pinned
 and automatically skips pinned formulae. If the pinned-package query fails, a
 warning is printed and the run continues.
 .SS Clean Interrupts and Cron Safety
-Ctrl-C mid-upgrade prints how many packages were upgraded, failed, and not
-attempted, then exits 130. In a non-TTY session without
+Ctrl-C or SIGTERM mid-upgrade prints how many packages were upgraded, failed,
+and not attempted, cancels pending downloads, then exits 130. In a non-TTY
+session without
 .BR \-y ,
 the tool exits 1 immediately instead of hanging on the prompt.
+.SH CONFIGURATION
+.I ~/.brewmasterrc.json
+supplies defaults for any of
+.BR skip ", " only ", " greedy ", " notify ", " backup ", " jobs ", " retries ,
+.BR timeout ", " log_json ", " no_cleanup ", " no_prefetch ", " color ", and " ascii .
+Command-line flags override it; unknown or mistyped keys warn and are ignored.
+.PP
+.EX
+{
+  "skip": ["python@*", "node"],
+  "jobs": 8,
+  "log_json": true
+}
+.EE
 .SH EXAMPLES
 .TP
 Interactive upgrade (default):
@@ -170,7 +294,7 @@ Interactive upgrade (default):
 python3 brewmaster.py
 .EE
 .TP
-Pick packages from a numbered list:
+Pick packages from a numbered table:
 .EX
 python3 brewmaster.py -i
 .EE
@@ -180,12 +304,17 @@ Auto-approve, skip node and all python versions, notify:
 python3 brewmaster.py -y --skip node 'python@*' --notify
 .EE
 .TP
+Upgrade only the Rust toolchain packages:
+.EX
+python3 brewmaster.py --only 'rust*' -y
+.EE
+.TP
 Preview outdated packages (exit 3 if any found):
 .EX
 python3 brewmaster.py --check-only
 .EE
 .TP
-Show total download size before confirming:
+Show per-package download sizes before confirming:
 .EX
 python3 brewmaster.py --sizes
 .EE
@@ -197,7 +326,17 @@ python3 brewmaster.py --backup --formula-only
 .TP
 Cron-friendly run with JSON history:
 .EX
-python3 brewmaster.py -y --log-json
+python3 brewmaster.py -y -q --log-json
+.EE
+.TP
+Feed the result to another tool:
+.EX
+python3 brewmaster.py -y --json | jq '.failures'
+.EE
+.TP
+Review the last 30 recorded runs:
+.EX
+python3 brewmaster.py --history 30
 .EE
 .TP
 Give a slow cask 20 minutes before treating it as hung:
@@ -207,19 +346,36 @@ python3 brewmaster.py --cask-only --timeout 1200 -y
 .SH FILES
 .TP
 .I ~/.brewmaster.log
-Timestamped log of all runs with per-command AUDIT lines. Mode 0600.
+Timestamped log of all runs with per-command AUDIT lines. Mode 0600, rotated
+at 2 MB with 3 generations kept.
 .TP
 .I ~/.brewmaster_history.jsonl
 One JSON record per run when
 .B \-\-log\-json
-is set. Mode 0600.
+is set, trimmed to the newest 500. Mode 0600.
+.TP
+.I ~/.brewmaster.lock
+Single-instance lock held for the duration of a run. Mode 0600.
+.TP
+.I ~/.brewmasterrc.json
+Optional defaults for command-line flags.
 .TP
 .I ~/.brewmaster_backup_YYYYMMDD_HHMMSS.Brewfile
 Bundle snapshots created by
 .BR \-\-backup ;
-the five newest are kept.
+the five newest are kept. Mode 0600.
+.SH ENVIRONMENT
+.TP
+.B NO_COLOR
+When set, disables color under
+.BR "\-\-color auto" .
+.TP
+.B TERM
+.B dumb
+or unset disables color and the live progress line under
+.BR "\-\-color auto" .
 .SH REQUIREMENTS
-Python 3.10 or later, Homebrew (
+Python 3.10 or later (standard library only), Homebrew (
 .I https://brew.sh
 ), macOS.
 .PP
