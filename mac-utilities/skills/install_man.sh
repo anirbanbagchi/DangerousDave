@@ -34,6 +34,7 @@ else
     install_page "brewmaster"
     install_page "all_python"
     install_page "PakMan"
+    install_page "clear_terminal_history"
 fi
 
 # Rebuild the whatis database so man -k / apropos picks pages up
@@ -46,3 +47,4 @@ echo "Done. Try:"
 echo "  man brewmaster.py"
 echo "  man all_python.py"
 echo "  man PakMan.py"
+echo "  man clear_terminal_history.py"
