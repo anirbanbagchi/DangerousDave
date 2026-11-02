@@ -10,6 +10,7 @@ Python 3.10+, standard library only.
 from __future__ import annotations
 
 import argparse
+import codecs
 import datetime
 import fcntl
 import fnmatch
@@ -23,6 +24,7 @@ import shutil
 import signal
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import unicodedata
@@ -30,7 +32,7 @@ from concurrent.futures import Future, ThreadPoolExecutor
 from contextlib import contextmanager
 from pathlib import Path
 
-VERSION = "3.0.0"
+VERSION = "3.1.0"
 
 HOME = Path.home()
 LOG_PATH = HOME / ".brewmaster.log"
@@ -44,8 +46,9 @@ LOG_MAX_BYTES = 2 * 1024 * 1024
 LOG_BACKUPS = 3
 
 # Package names may come from third-party taps; reject anything outside
-# brew's own naming alphabet before passing it to a subprocess.
-VALID_PKG = re.compile(r"^[A-Za-z0-9@._+/-]+$")
+# brew's own naming alphabet before passing it to a subprocess. The first
+# character matters: a name starting with "-" would be read as an option.
+VALID_PKG = re.compile(r"[A-Za-z0-9][A-Za-z0-9@._+/-]*")
 
 # Standard install locations (Apple Silicon, Intel). Anything else is
 # worth a warning — a brew earlier in PATH is a classic hijack vector.
@@ -158,6 +161,14 @@ GLYPHS_ASCII = {
 SPINNER_UNICODE = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 SPINNER_ASCII = "|/-\\"
 
+# A pipe or log file has no edge to fit: clipping there would simply lose text.
+NON_TTY_WIDTH = 10_000
+
+
+def valid_name(name: str) -> bool:
+    """fullmatch, so a trailing newline fails; no "..", so it cannot be a path."""
+    return VALID_PKG.fullmatch(name) is not None and ".." not in name
+
 
 def char_width(ch: str) -> int:
     """Terminal columns one character occupies.
@@ -247,6 +258,16 @@ def human_time(secs: float) -> str:
     return f"{secs // 3600}h {(secs % 3600) // 60:02d}m"
 
 
+def silence_stream(stream) -> None:
+    """Point a stream whose reader has gone at /dev/null."""
+    try:
+        devnull = os.open(os.devnull, os.O_WRONLY)
+        os.dup2(devnull, stream.fileno())
+        os.close(devnull)
+    except (OSError, ValueError):
+        pass
+
+
 def _want_color(mode: str, stream) -> bool:
     if mode == "never":
         return False
@@ -298,7 +319,7 @@ class UI:
     @property
     def width(self) -> int:
         if not self.tty:
-            return 100
+            return NON_TTY_WIDTH
         return max(46, min(120, shutil.get_terminal_size((100, 24)).columns))
 
     def c(self, text: str, *codes: str) -> str:
@@ -311,17 +332,31 @@ class UI:
         """Write through, stepping around the live line if one is active."""
         with self.lock:
             live = self.live
-            if live is not None:
-                live.clear()
-            self.stream.write(text)
-            if live is not None:
-                live.draw()
-            self.stream.flush()
+            try:
+                if live is not None:
+                    live.clear()
+                self.stream.write(text)
+                if live is not None:
+                    live.draw()
+                self.stream.flush()
+            except BrokenPipeError:
+                # The reader went away (`| head`). That must not abort a run
+                # part-way through or change its exit code.
+                silence_stream(self.stream)
 
     def out(self, text: str = "") -> None:
         if self.quiet:
             return
         self._raw(clip(text, self.width) + "\n")
+
+    def always(self, text: str) -> None:
+        """Warnings and errors are worth seeing even under --quiet."""
+        self._raw(clip(text, self.width) + "\n")
+
+    def passthrough(self, text: str) -> None:
+        """Raw subprocess output, streamed under --verbose."""
+        if not self.quiet:
+            self._raw(text)
 
     def blank(self) -> None:
         self.out("")
@@ -340,12 +375,10 @@ class UI:
         self.out(f"  {self.c(self.g['ok'], GREEN)} {text}")
 
     def warn(self, text: str) -> None:
-        self.out(f"  {self.c(self.g['warn'], YELLOW)} {self.c(text, YELLOW)}")
+        self.always(f"  {self.c(self.g['warn'], YELLOW)} {self.c(text, YELLOW)}")
 
     def error(self, text: str) -> None:
-        # Errors are worth seeing even under --quiet.
-        line = f"  {self.c(self.g['fail'], RED)} {self.c(text, RED)}"
-        self._raw(clip(line, self.width) + "\n")
+        self.always(f"  {self.c(self.g['fail'], RED)} {self.c(text, RED)}")
 
     # -- boxes -------------------------------------------------------------
 
@@ -378,17 +411,6 @@ class UI:
         width = min(self.width - 4, max(vislen(x) for x in body))
         width = max(width, 34)
         self._box([clip(x, width) for x in body], width, color)
-
-    def rule(self, title: str = "", color: str = GREY) -> None:
-        if self.quiet:
-            return
-        g = self.g["h"]
-        if not title:
-            self.out(self.c(g * (self.width - 2), color))
-            return
-        label = f" {title} "
-        fill = max(3, self.width - 2 - len(label) - 2)
-        self.out(self.c(g * 2 + label + g * fill, color))
 
     # -- tables ------------------------------------------------------------
 
@@ -526,7 +548,11 @@ class Status(LiveLine):
                 self.ui.stream.flush()
         mark = self.ui.c(self.ui.g[glyph], color)
         elapsed = time.monotonic() - self.started
-        self.ui.out(f"  {mark} {text} {self.ui.c(f'({elapsed:.1f}s)', GREY)}")
+        line = f"  {mark} {text} {self.ui.c(f'({elapsed:.1f}s)', GREY)}"
+        if glyph == "ok":
+            self.ui.out(line)
+        else:
+            self.ui.always(line)
 
 
 class Bar(LiveLine):
@@ -608,12 +634,86 @@ class Ctx:
         return [self.brew, *parts]
 
 
+# Every running child, so a signal can stop them all. Each one leads its own
+# process group: a timed-out or interrupted upgrade must not leave a curl or
+# ruby behind, still holding a package manager's locks.
+_children: set[subprocess.Popen] = set()
+_children_lock = threading.RLock()  # re-entrant: the signal handler takes it too
+_stopping = False
+KILL_GRACE = 5.0            # seconds between SIGTERM and SIGKILL
+READER_GRACE = 5.0          # seconds to drain output once a child has exited
+
+
+def _signal_group(proc: subprocess.Popen, sig: int) -> None:
+    try:
+        os.killpg(proc.pid, sig)
+    except OSError:
+        pass
+
+
+def stop_group(proc: subprocess.Popen) -> None:
+    """Terminate a child's whole process group, escalating to SIGKILL."""
+    _signal_group(proc, signal.SIGTERM)
+    try:
+        proc.wait(timeout=KILL_GRACE)
+    except subprocess.TimeoutExpired:
+        pass
+    finally:
+        _signal_group(proc, signal.SIGKILL)
+
+
+def _kill_children() -> None:
+    with _children_lock:
+        procs = list(_children)
+    for proc in procs:
+        _signal_group(proc, signal.SIGKILL)
+
+
+def stop_children() -> None:
+    """Stop every running child and refuse to start more."""
+    global _stopping
+    with _children_lock:
+        _stopping = True
+        procs = list(_children)
+    for proc in procs:
+        _signal_group(proc, signal.SIGTERM)
+    if procs:
+        # Worker threads are blocked on these; the interpreter cannot exit
+        # until they return, so a child ignoring SIGTERM must not be allowed
+        # to hold the whole run open.
+        timer = threading.Timer(KILL_GRACE, _kill_children)
+        timer.daemon = True
+        timer.start()
+
+
+def _pump(pipe, sink: list[str], echo) -> None:
+    """Drain one child pipe. Tools can print anything, so bad UTF-8 is replaced."""
+    decoder = codecs.getincrementaldecoder("utf-8")("replace")
+    try:
+        for chunk in iter(lambda: pipe.read(65536), b""):
+            text = decoder.decode(chunk)
+            sink.append(text)
+            if echo is not None and text:
+                echo(text)
+    except (OSError, ValueError):
+        pass
+
+
+def _join_readers(readers: list[threading.Thread]) -> None:
+    """Wait for output to drain. A daemon the child left running can hold a pipe
+    open indefinitely, and that must not stall the run."""
+    deadline = time.monotonic() + READER_GRACE
+    for reader in readers:
+        reader.join(timeout=max(0.0, deadline - time.monotonic()))
+
+
 def run(ctx: Ctx, cmd: list[str], *, timeout: float | None = None,
         stream: bool = False, dry: bool = False) -> Res:
     """Run a command, audit it, and return its result. Never exits the process.
 
-    Package upgrades and queries get DEVNULL on stdin so a stray sudo or
-    confirmation prompt fails fast instead of hanging until the timeout.
+    Package upgrades and queries get DEVNULL on stdin and no controlling
+    terminal, so a stray sudo or confirmation prompt fails fast instead of
+    hanging until the timeout.
     """
     cmd_str = shlex.join(cmd)
 
@@ -622,28 +722,58 @@ def run(ctx: Ctx, cmd: list[str], *, timeout: float | None = None,
         log(f"AUDIT: {cmd_str} -> exit 0 (dry-run, not executed)")
         return Res(0)
 
-    kwargs: dict = {"text": True, "env": ctx.env, "stdin": subprocess.DEVNULL}
-    if not stream:
-        kwargs["capture_output"] = True
-
     started = time.monotonic()
     try:
-        p = subprocess.run(cmd, timeout=timeout, **kwargs)
+        with _children_lock:
+            if _stopping:
+                audit(cmd, EXIT_INTERRUPT, "(not started: interrupted)")
+                return Res(EXIT_INTERRUPT, "", "interrupted")
+            # Its own session, so the whole process tree can be signalled.
+            proc = subprocess.Popen(cmd, env=ctx.env, stdin=subprocess.DEVNULL,
+                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                    bufsize=0, start_new_session=True)
+            _children.add(proc)
     except FileNotFoundError:
         audit(cmd, RC_NOT_FOUND, "(executable not found)")
         return Res(RC_NOT_FOUND, "", f"executable not found: {cmd[0]}")
     except PermissionError as exc:
         audit(cmd, RC_NOT_FOUND, "(permission denied)")
         return Res(RC_NOT_FOUND, "", f"permission denied: {exc}")
-    except subprocess.TimeoutExpired as exc:
+    except OSError as exc:
+        audit(cmd, RC_NOT_FOUND, f"(could not start: {exc})")
+        return Res(RC_NOT_FOUND, "", f"could not start {cmd[0]}: {exc}")
+
+    # Captured even when streaming, so a failure under --verbose still has a reason.
+    echo = ctx.ui.passthrough if stream else None
+    out: list[str] = []
+    err: list[str] = []
+    readers = [threading.Thread(target=_pump, args=(pipe, sink, echo), daemon=True)
+               for pipe, sink in ((proc.stdout, out), (proc.stderr, err))]
+    for reader in readers:
+        reader.start()
+
+    try:
+        rc = proc.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        stop_group(proc)
         secs = time.monotonic() - started
         audit(cmd, RC_TIMEOUT, f"(timed out after {timeout}s)")
-        partial = exc.stdout if isinstance(exc.stdout, str) else ""
-        return Res(RC_TIMEOUT, partial, f"timed out after {timeout}s", secs)
+        _join_readers(readers)
+        return Res(RC_TIMEOUT, "".join(out), f"timed out after {timeout}s", secs)
+    except BaseException:
+        try:
+            stop_group(proc)
+        finally:
+            audit(cmd, EXIT_INTERRUPT, "(interrupted)")
+        raise
+    finally:
+        with _children_lock:
+            _children.discard(proc)
 
+    _join_readers(readers)
     secs = time.monotonic() - started
-    audit(cmd, p.returncode, f"({secs:.1f}s)")
-    return Res(p.returncode, p.stdout or "", p.stderr or "", secs)
+    audit(cmd, rc, f"({secs:.1f}s)")
+    return Res(rc, "".join(out), "".join(err), secs)
 
 
 def brew_env() -> dict[str, str]:
@@ -665,10 +795,14 @@ def resolve_brew(ui: UI) -> tuple[str, str]:
     can print the warning after the banner."""
     found = shutil.which("brew")
     if not found:
+        # cron and launchd start with a PATH that has no Homebrew directory.
+        found = next((p for p in KNOWN_BREW_PATHS if os.access(p, os.X_OK)), None)
+    if not found:
         ui.error("'brew' not found. Install Homebrew first: https://brew.sh/")
         sys.exit(EXIT_FATAL)
     brew = str(Path(found).resolve())
-    if brew not in KNOWN_BREW_PATHS:
+    # Check both: on Intel /usr/local/bin/brew is a symlink into ../Homebrew.
+    if brew not in KNOWN_BREW_PATHS and os.path.abspath(found) not in KNOWN_BREW_PATHS:
         log(f"WARNING: unusual brew location: {brew}")
         return brew, f"Unusual brew location: {brew}"
     return brew, ""
@@ -686,8 +820,10 @@ def single_instance(ui: UI, enabled: bool):
         yield True
         return
     try:
-        handle = open(LOCK_PATH, "w")
-        os.chmod(LOCK_PATH, 0o600)
+        # Not "w": a run that gets refused must not erase the holder's pid.
+        fd = os.open(LOCK_PATH, os.O_RDWR | os.O_CREAT, 0o600)
+        os.fchmod(fd, 0o600)
+        handle = os.fdopen(fd, "r+")
     except OSError as exc:
         # Not being able to create the lock file at all is a different problem
         # from another run holding it — do not refuse the run over it.
@@ -698,12 +834,16 @@ def single_instance(ui: UI, enabled: bool):
     try:
         fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
     except OSError:
+        holder = handle.read().strip()
         handle.close()
-        ui.error(f"Another BrewMaster run holds {LOCK_PATH}. Use --no-lock to override.")
+        who = f" (pid {holder})" if holder else ""
+        ui.error(f"Another BrewMaster run{who} holds {LOCK_PATH}. Use --no-lock to override.")
         log("Refused to start: lock already held.")
         yield False
         return
     try:
+        handle.seek(0)
+        handle.truncate()
         handle.write(f"{os.getpid()}\n")
         handle.flush()
         yield True
@@ -726,13 +866,16 @@ CONFIG_SCHEMA: dict[str, type] = {
 }
 
 
+COLOR_MODES = ("auto", "always", "never")
+
+
 def load_config(ui: UI) -> dict:
     """Read ~/.brewmasterrc.json. Unknown or mistyped keys warn and are ignored."""
     if not CONFIG_PATH.exists():
         return {}
     try:
         raw = json.loads(CONFIG_PATH.read_text())
-    except (OSError, json.JSONDecodeError) as exc:
+    except (OSError, ValueError) as exc:  # ValueError: bad JSON or bad UTF-8
         ui.warn(f"Ignoring unreadable config {CONFIG_PATH}: {exc}")
         return {}
     if not isinstance(raw, dict):
@@ -747,6 +890,8 @@ def load_config(ui: UI) -> dict:
             ui.warn(f"Ignoring config key {key!r}: expected {want.__name__}")
         elif want is list and not all(isinstance(v, str) for v in value):
             ui.warn(f"Ignoring config key {key!r}: expected a list of strings")
+        elif key == "color" and value not in COLOR_MODES:
+            ui.warn(f"Ignoring config key 'color': expected one of {', '.join(COLOR_MODES)}")
         else:
             clean[key] = value
     if clean:
@@ -780,7 +925,12 @@ def get_pinned(ctx: Ctx) -> set[str]:
 def get_outdated(ctx: Ctx, greedy: bool) -> tuple[list[dict], list[dict], str]:
     """Outdated formulae and casks from one brew call. Third item is an error, if any."""
     cmd = ctx.brew_cmd("outdated", "--json=v2")
-    if greedy:
+    # No point paying for a query whose results would be thrown away.
+    if ctx.args.formula_only:
+        cmd.append("--formula")
+    elif ctx.args.cask_only:
+        cmd.append("--cask")
+    if greedy and not ctx.args.formula_only:
         cmd.append("--greedy")
     res = run(ctx, cmd, timeout=300)
     if not res.out.strip():
@@ -807,10 +957,11 @@ def available_version(pkg: dict) -> str:
     return str(pkg.get("current_version") or "?")
 
 
-def cached_sizes(ctx: Ctx, formulae: list[str], casks: list[str]) -> dict[str, int]:
-    """Map package name -> cached download size, via batched `brew --cache` calls."""
-    sizes: dict[str, int] = {}
-    for flag, names in (("--formula", formulae), ("--cask", casks)):
+def cached_sizes(ctx: Ctx, formulae: list[str],
+                 casks: list[str]) -> dict[tuple[str, str], int]:
+    """Map (kind, name) -> cached download size, via batched `brew --cache` calls."""
+    sizes: dict[tuple[str, str], int] = {}
+    for kind, flag, names in (("formula", "--formula", formulae), ("cask", "--cask", casks)):
         if not names:
             continue
         res = run(ctx, ctx.brew_cmd("--cache", flag, *names), timeout=120)
@@ -823,9 +974,9 @@ def cached_sizes(ctx: Ctx, formulae: list[str], casks: list[str]) -> dict[str, i
             continue
         for name, path in zip(names, paths):
             try:
-                sizes[name] = Path(path).stat().st_size
+                sizes[(kind, name)] = Path(path).stat().st_size
             except OSError:
-                sizes[name] = 0
+                sizes[(kind, name)] = 0
     return sizes
 
 
@@ -889,8 +1040,7 @@ def backup_bundle(ctx: Ctx) -> None:
             log(f"Backup failed: {res.message}")
             return
         try:
-            backup_path.write_text(res.out)
-            os.chmod(backup_path, 0o600)
+            write_private(backup_path, res.out)
         except OSError as exc:
             st.done(f"Backup could not be written: {exc}", glyph="fail", color=RED)
             log(f"Backup write failed: {exc}")
@@ -921,6 +1071,25 @@ class Entry:
     def is_cask(self) -> bool:
         return self.kind == "cask"
 
+    @property
+    def key(self) -> tuple[str, str]:
+        """A formula and a cask can share a name (docker), so the name alone won't do."""
+        return (self.kind, self.name)
+
+    def as_dict(self) -> dict:
+        return {"kind": self.kind, "name": self.name,
+                "installed": self.installed, "available": self.available}
+
+
+def short_name(name: str) -> str:
+    """`brew outdated` reports tapped packages as user/tap/name."""
+    return name.rsplit("/", 1)[-1]
+
+
+def matches_any(name: str, patterns: list[str]) -> bool:
+    short = short_name(name)
+    return any(fnmatch.fnmatch(name, pat) or fnmatch.fnmatch(short, pat) for pat in patterns)
+
 
 def filter_packages(pkgs: list[dict], skip: list[str], only: list[str],
                     pinned: set[str]) -> tuple[list[dict], list[str], list[str], list[str]]:
@@ -931,11 +1100,11 @@ def filter_packages(pkgs: list[dict], skip: list[str], only: list[str],
     kept, by_skip, by_only, by_pin = [], [], [], []
     for pkg in pkgs:
         name = str(pkg.get("name", ""))
-        if name in pinned:
+        if pkg.get("pinned") or name in pinned or short_name(name) in pinned:
             by_pin.append(name)
-        elif any(fnmatch.fnmatch(name, pat) for pat in skip):
+        elif matches_any(name, skip):
             by_skip.append(name)
-        elif only and not any(fnmatch.fnmatch(name, pat) for pat in only):
+        elif only and not matches_any(name, only):
             by_only.append(name)
         else:
             kept.append(pkg)
@@ -952,13 +1121,13 @@ def parse_selection(text: str, count: int) -> list[int] | None:
         if "-" in part:
             lo, _, hi = part.partition("-")
             lo, hi = lo.strip(), hi.strip()
-            if not (lo.isdigit() and hi.isdigit()):
+            if not (lo.isdecimal() and hi.isdecimal()):
                 return None
             lo_i, hi_i = int(lo), int(hi)
             if lo_i < 1 or hi_i > count or lo_i > hi_i:
                 return None
             indices.update(range(lo_i - 1, hi_i))
-        elif part.isdigit():
+        elif part.isdecimal():
             i = int(part)
             if i < 1 or i > count:
                 return None
@@ -1011,11 +1180,11 @@ class Prefetcher:
         self.timeout = timeout
         self.pool = ThreadPoolExecutor(max_workers=max(1, jobs),
                                        thread_name_prefix="bm-fetch")
-        self.futures: dict[str, Future] = {}
+        self.futures: dict[tuple[str, str], Future] = {}
 
     def submit(self, entries: list[Entry]) -> None:
         for entry in entries:
-            self.futures[entry.name] = self.pool.submit(self._fetch, entry)
+            self.futures[entry.key] = self.pool.submit(self._fetch, entry)
 
     def _fetch(self, entry: Entry) -> Res:
         flag = "--cask" if entry.is_cask else "--formula"
@@ -1025,7 +1194,7 @@ class Prefetcher:
     def wait(self, entry: Entry) -> None:
         """Block until this package's download finishes; failures are non-fatal
         because `brew upgrade` will simply fetch it again itself."""
-        future = self.futures.get(entry.name)
+        future = self.futures.get(entry.key)
         if future is None:
             return
         try:
@@ -1050,9 +1219,11 @@ class Prefetcher:
 PERMANENT_ERRORS = (
     "no available formula", "no casks found", "no available cask",
     "is not installed", "does not exist", "no such keg",
-    "requires a password", "sudo: a terminal is required",
+    "requires a password", "a password is required", "sudo: a terminal is required",
     "not supported on", "requires macos",
 )
+
+NEEDS_PASSWORD = ("sudo: a terminal is required", "a password is required", "requires a password")
 
 
 def is_permanent(error: str) -> bool:
@@ -1060,9 +1231,19 @@ def is_permanent(error: str) -> bool:
     return any(marker in low for marker in PERMANENT_ERRORS)
 
 
+def first_error_line(text: str) -> str:
+    """The line that says what went wrong; brew often prints warnings before it."""
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    for line in lines:
+        if line.lower().startswith("error:"):
+            return line
+    return lines[0] if lines else "unknown error"
+
+
 def upgrade_one(ctx: Ctx, entry: Entry, retries: int, timeout: float) -> tuple[bool, str]:
     """Upgrade a single package with bounded retries and backoff."""
-    cmd = ctx.brew_cmd("upgrade", "--cask") if entry.is_cask else ctx.brew_cmd("upgrade")
+    # Explicit even for formulae: a bare name is ambiguous when a cask shares it.
+    cmd = ctx.brew_cmd("upgrade", "--cask" if entry.is_cask else "--formula")
     if entry.is_cask and ctx.args.greedy:
         cmd.append("--greedy")
     cmd.append(entry.name)
@@ -1093,16 +1274,31 @@ def upgrade_one(ctx: Ctx, entry: Entry, retries: int, timeout: float) -> tuple[b
 # History
 # --------------------------------------------------------------------------
 
+def write_private(path: Path, text: str) -> None:
+    """Atomically replace `path`; mkstemp means it is 0600 from the first byte."""
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f"{path.name}.")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(text)
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
 def write_history(record: dict) -> None:
     """Append one JSON record per run, trimming the file to MAX_HISTORY records."""
     try:
         HISTORY_PATH.touch(mode=0o600, exist_ok=True)
         os.chmod(HISTORY_PATH, 0o600)
-        with open(HISTORY_PATH, "a") as fh:
+        with open(HISTORY_PATH, "a", encoding="utf-8") as fh:
             fh.write(json.dumps(record) + "\n")
-        lines = HISTORY_PATH.read_text().splitlines()
+        lines = HISTORY_PATH.read_text(encoding="utf-8", errors="replace").splitlines()
         if len(lines) > MAX_HISTORY:
-            HISTORY_PATH.write_text("\n".join(lines[-MAX_HISTORY:]) + "\n")
+            write_private(HISTORY_PATH, "\n".join(lines[-MAX_HISTORY:]) + "\n")
     except OSError as exc:
         log(f"Could not write history: {exc}")
 
@@ -1112,7 +1308,7 @@ def read_history(limit: int) -> list[dict]:
         return []
     records: list[dict] = []
     try:
-        for line in HISTORY_PATH.read_text().splitlines():
+        for line in HISTORY_PATH.read_text(encoding="utf-8", errors="replace").splitlines():
             line = line.strip()
             if not line:
                 continue
@@ -1127,6 +1323,18 @@ def read_history(limit: int) -> list[dict]:
     return records[-limit:]
 
 
+def _number(value, cast=int):
+    """History is a hand-editable file; one bad record must not stop the table."""
+    try:
+        return cast(value or 0)
+    except (TypeError, ValueError):
+        return cast(0)
+
+
+def _count(value) -> int:
+    return len(value) if isinstance(value, list) else 0
+
+
 def show_history(ui: UI, limit: int) -> int:
     records = read_history(limit)
     if not records:
@@ -1134,13 +1342,14 @@ def show_history(ui: UI, limit: int) -> int:
         return EXIT_OK
     rows = []
     for rec in records:
-        code = int(rec.get("exit_code", 0) or 0)
-        color = GREEN if code == EXIT_OK else (YELLOW if code == EXIT_FAILURES else RED)
+        code = _number(rec.get("exit_code"))
+        # Exit 3 is a --check-only answer, not an error.
+        color = {EXIT_OK: GREEN, EXIT_OUTDATED: CYAN, EXIT_FAILURES: YELLOW}.get(code, RED)
         rows.append([
             str(rec.get("timestamp", "?"))[:19].replace("T", " "),
-            ui.c(str(len(rec.get("upgraded", []) or [])), GREEN),
-            ui.c(str(len(rec.get("failures", []) or [])), RED if rec.get("failures") else GREY),
-            human_time(float(rec.get("elapsed_secs", 0) or 0)),
+            ui.c(str(_count(rec.get("upgraded"))), GREEN),
+            ui.c(str(_count(rec.get("failures"))), RED if _count(rec.get("failures")) else GREY),
+            human_time(_number(rec.get("elapsed_secs"), float)),
             ui.c(str(code), color),
         ])
     ui.blank()
@@ -1211,7 +1420,7 @@ def build_parser() -> argparse.ArgumentParser:
                       help="Timeout per package upgrade")
 
     out = parser.add_argument_group("output")
-    out.add_argument("--color", choices=("auto", "always", "never"), default="auto",
+    out.add_argument("--color", choices=COLOR_MODES, default="auto",
                      help="Colorise output")
     out.add_argument("--ascii", action="store_true",
                      help="ASCII-only output (no box drawing or emoji)")
@@ -1230,8 +1439,19 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def _raise_interrupt(signum, frame) -> None:
-    """Turn SIGTERM into the same KeyboardInterrupt path Ctrl-C already takes."""
+    """Turn a signal into the KeyboardInterrupt path, stopping children first.
+
+    They run in their own sessions, so nothing else will tell them to stop.
+    """
+    stop_children()
     raise KeyboardInterrupt
+
+
+def install_signal_handlers() -> None:
+    for sig in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
+        # An ignored signal was ignored on purpose: nohup, or `&` in a script.
+        if signal.getsignal(sig) != signal.SIG_IGN:
+            signal.signal(sig, _raise_interrupt)
 
 
 def make_ui(args: argparse.Namespace) -> UI:
@@ -1247,6 +1467,13 @@ def make_ui(args: argparse.Namespace) -> UI:
         force_ascii=args.ascii,
         quiet=args.quiet,
     )
+
+
+def apply_cli_precedence(cli: argparse.Namespace, config: dict) -> None:
+    """A name asked for on the command line beats the same name skipped in the
+    config file; --skip wins over --only, so left alone it would silently win."""
+    if cli.only and "skip" in config:
+        config["skip"] = [pat for pat in config["skip"] if pat not in cli.only]
 
 
 def validate(parser: argparse.ArgumentParser, args: argparse.Namespace) -> None:
@@ -1297,19 +1524,22 @@ def outdated_table(ui: UI, entries: list[Entry], show_sizes: bool) -> None:
 
 def summary_panel(ui: UI, upgraded: list[str], failures: list[tuple[str, str, str]],
                   skipped: int, elapsed: float, downloaded: int, freed: str,
-                  interrupted: bool) -> None:
+                  interrupted: bool, dry_run: bool = False) -> None:
     if interrupted:
         title, color = "Interrupted", YELLOW
+    elif dry_run:
+        title, color = "Dry run: nothing was changed", BLUE
     elif failures:
         title, color = "Completed with failures", YELLOW
     else:
         title, color = "Done", GREEN
 
     def row(label: str, value: str, value_color: str = "") -> str:
-        return f"{ui.c(pad(label, 12), GREY)}{ui.c(value, value_color)}"
+        return f"{ui.c(pad(label, 14), GREY)}{ui.c(value, value_color)}"
 
     lines = [
-        row("Upgraded", str(len(upgraded)), GREEN if upgraded else ""),
+        row("Would upgrade" if dry_run else "Upgraded", str(len(upgraded)),
+            GREEN if upgraded else ""),
         row("Failed", str(len(failures)), RED if failures else ""),
     ]
     if skipped:
@@ -1339,6 +1569,7 @@ def main(argv: list[str] | None = None) -> int:
     if not args.no_config:
         config = load_config(ui)
         if config:
+            apply_cli_precedence(args, config)
             parser.set_defaults(**config)
             args = parser.parse_args(argv)
             ui = make_ui(args)
@@ -1358,7 +1589,7 @@ def main(argv: list[str] | None = None) -> int:
         return EXIT_FATAL
 
     # SIGTERM (launchd stopping the job) takes the same clean path as Ctrl-C.
-    signal.signal(signal.SIGTERM, _raise_interrupt)
+    install_signal_handlers()
 
     start = time.monotonic()
     log(f"--- BrewMaster {VERSION} run started: {shlex.join(sys.argv[1:])} ---")
@@ -1385,9 +1616,6 @@ def main(argv: list[str] | None = None) -> int:
 def run_upgrade(ctx: Ctx, start: float) -> int:
     ui, args = ctx.ui, ctx.args
     live = not args.verbose
-
-    if args.backup:
-        backup_bundle(ctx)
 
     # -- refresh metadata --------------------------------------------------
     if args.no_update:
@@ -1426,7 +1654,9 @@ def run_upgrade(ctx: Ctx, start: float) -> int:
         formulae_raw = []
 
     formulae, skip_f, only_f, pin_f = filter_packages(formulae_raw, args.skip, args.only, pinned)
-    casks, skip_c, only_c, pin_c = filter_packages(casks_raw, args.skip, args.only, pinned)
+    # Only formulae can be pinned: a pinned formula says nothing about a
+    # cask that happens to share its name.
+    casks, skip_c, only_c, pin_c = filter_packages(casks_raw, args.skip, args.only, set())
 
     for name in pin_f + pin_c:
         ui.out(f"  {ui.c(ui.g['pin'], YELLOW)} pinned, skipping: {name}")
@@ -1441,14 +1671,16 @@ def run_upgrade(ctx: Ctx, start: float) -> int:
     if not entries:
         elapsed = time.monotonic() - start
         ui.blank()
-        ui.panel("Everything is up to date", [
+        ui.panel("Nothing to upgrade" if skipped_total else "Everything is up to date", [
             f"{ui.c(pad('Skipped', 12), GREY)}{skipped_total}",
             f"{ui.c(pad('Elapsed', 12), GREY)}{human_time(elapsed)}",
         ], color=GREEN)
         log("Everything up to date. Run complete.")
         if args.notify:
-            send_notification("BrewMaster", "Everything is up to date!")
-        record = build_record([], [], skipped_total, elapsed, 0, "", False, EXIT_OK)
+            send_notification("BrewMaster", "Nothing to upgrade." if skipped_total
+                              else "Everything is up to date!")
+        record = build_record([], [], skipped_total, elapsed, 0, "", False, EXIT_OK,
+                              dry_run=args.dry_run)
         finish_reporting(ctx, record)
         return EXIT_OK
 
@@ -1456,7 +1688,7 @@ def run_upgrade(ctx: Ctx, start: float) -> int:
     failures: list[tuple[str, str, str]] = []
     valid: list[Entry] = []
     for entry in entries:
-        if VALID_PKG.match(entry.name):
+        if valid_name(entry.name):
             valid.append(entry)
         else:
             failures.append((entry.kind, entry.name, "invalid package name — skipped"))
@@ -1464,6 +1696,9 @@ def run_upgrade(ctx: Ctx, start: float) -> int:
             log(f"SKIPPED invalid package name: {entry.name!r}")
     entries = valid
     if not entries:
+        finish_reporting(ctx, build_record(
+            [], failures, skipped_total, time.monotonic() - start, 0, "", False, EXIT_FAILURES,
+            dry_run=args.dry_run))
         return EXIT_FAILURES
 
     prefetcher: Prefetcher | None = None
@@ -1476,7 +1711,7 @@ def run_upgrade(ctx: Ctx, start: float) -> int:
                              [e.name for e in entries if not e.is_cask],
                              [e.name for e in entries if e.is_cask])
         for entry in entries:
-            entry.size = sizes.get(entry.name, 0)
+            entry.size = sizes.get(entry.key, 0)
         downloaded = sum(e.size for e in entries)
 
     ui.blank()
@@ -1489,6 +1724,9 @@ def run_upgrade(ctx: Ctx, start: float) -> int:
         elapsed = time.monotonic() - start
         ui.note(f"check-only: nothing was upgraded ({human_time(elapsed)})")
         log(f"Check-only run: {len(entries)} package(s) outdated.")
+        finish_reporting(ctx, build_record(
+            [], failures, skipped_total, elapsed, downloaded, "", False, EXIT_OUTDATED,
+            outdated=entries, dry_run=args.dry_run))
         return EXIT_OUTDATED
 
     # -- consent -----------------------------------------------------------
@@ -1496,16 +1734,27 @@ def run_upgrade(ctx: Ctx, start: float) -> int:
         entries = select_packages(ui, entries)
         if not entries:
             ui.note("nothing selected — upgrade canceled")
+            finish_reporting(ctx, build_record(
+                [], failures, skipped_total, time.monotonic() - start, downloaded, "",
+                False, EXIT_OK, dry_run=args.dry_run))
             return EXIT_OK
     elif not args.yes:
         if args.dry_run:
             ui.note("[dry-run] skipping confirmation prompt")
         elif not confirm(ui, f"\n{ui.g['bullet']} Upgrade these {len(entries)} package(s)? (y/N): "):
             ui.note("upgrade canceled")
+            finish_reporting(ctx, build_record(
+                [], failures, skipped_total, time.monotonic() - start, downloaded, "",
+                False, EXIT_OK, outdated=entries, dry_run=args.dry_run))
             return EXIT_OK
 
     if not check_disk_space(ctx, downloaded):
         return EXIT_FATAL
+
+    # Only now: a snapshot before a run that upgrades nothing would rotate an
+    # older, useful one out of the kept set.
+    if args.backup:
+        backup_bundle(ctx)
 
     # -- upgrade -----------------------------------------------------------
     if not args.no_prefetch and not args.sizes and not args.dry_run:
@@ -1530,8 +1779,9 @@ def run_upgrade(ctx: Ctx, start: float) -> int:
                 took = time.monotonic() - t0
                 if success:
                     upgraded.append(entry.name)
-                    log(f"Upgraded {entry.kind}: {entry.name} "
-                        f"{entry.installed} -> {entry.available}")
+                    if not args.dry_run:
+                        log(f"Upgraded {entry.kind}: {entry.name} "
+                            f"{entry.installed} -> {entry.available}")
                     bar.advance(
                         f"  {ui.c(ui.g['ok'], GREEN)} {ui.c(pad(entry.name, 24), BOLD)}"
                         f" {ui.c(entry.installed, GREY)} {ui.g['arrow']} "
@@ -1542,7 +1792,7 @@ def run_upgrade(ctx: Ctx, start: float) -> int:
                     log(f"FAILED {entry.kind}: {entry.name} — {error}")
                     bar.advance(
                         f"  {ui.c(ui.g['fail'], RED)} {ui.c(pad(entry.name, 24), BOLD)}"
-                        f" {ui.c(clip(error.splitlines()[0] if error else 'unknown error', 60), RED)}"
+                        f" {ui.c(clip(first_error_line(error), 60), RED)}"
                     )
     except KeyboardInterrupt:
         interrupted = True
@@ -1582,15 +1832,20 @@ def run_upgrade(ctx: Ctx, start: float) -> int:
         if ui.quiet:
             # --quiet still owes the caller its warnings and errors.
             for kind, name, error in failures:
-                ui.error(f"[{kind}] {name}: {(error or 'unknown error').splitlines()[0]}")
+                ui.error(f"[{kind}] {name}: {first_error_line(error)}")
         else:
             ui.blank()
             ui.step("warn", "Failures", YELLOW)
             ui.table(
                 ["Kind", "Package", "Error"],
-                [[kind_tag(ui, k), ui.c(n, BOLD), (e or "unknown error").splitlines()[0]]
+                [[kind_tag(ui, k), ui.c(n, BOLD), first_error_line(e)]
                  for k, n, e in failures],
             )
+        for kind, name, error in failures:
+            if any(marker in error.lower() for marker in NEEDS_PASSWORD):
+                flag = "--cask" if kind == "cask" else "--formula"
+                ui.note(f"{name} needs a password; run it yourself: "
+                        f"brew upgrade {flag} {name}")
 
     if interrupted:
         exit_code = EXIT_INTERRUPT
@@ -1599,21 +1854,24 @@ def run_upgrade(ctx: Ctx, start: float) -> int:
     else:
         exit_code = EXIT_OK
 
-    summary_panel(ui, upgraded, failures, skipped_total, elapsed, downloaded, freed, interrupted)
+    summary_panel(ui, upgraded, failures, skipped_total, elapsed, downloaded, freed, interrupted,
+                  dry_run=args.dry_run)
 
-    if args.notify:
-        if failures:
-            send_notification("BrewMaster", f"Done with {len(failures)} failure(s). Check the log.")
-        elif interrupted:
+    if args.notify and not args.dry_run:
+        if interrupted:
             send_notification("BrewMaster", "Run interrupted.")
+        elif failures:
+            send_notification("BrewMaster", f"Done with {len(failures)} failure(s). Check the log.")
         else:
             send_notification("BrewMaster", f"{len(upgraded)} package(s) upgraded successfully!")
 
-    log(f"Run complete: {len(upgraded)} upgraded, {len(failures)} failed, "
+    done_word = "would upgrade" if args.dry_run else "upgraded"
+    log(f"Run complete: {len(upgraded)} {done_word}, {len(failures)} failed, "
         f"elapsed {elapsed:.1f}s, exit {exit_code}")
 
-    record = build_record(upgraded, failures, skipped_total, elapsed, downloaded,
-                          freed, interrupted, exit_code)
+    record = build_record([] if args.dry_run else upgraded, failures, skipped_total, elapsed,
+                          downloaded, freed, interrupted, exit_code,
+                          outdated=entries, dry_run=args.dry_run)
     finish_reporting(ctx, record)
     return exit_code
 
@@ -1658,10 +1916,13 @@ def check_disk_space(ctx: Ctx, needed: int) -> bool:
 
 def build_record(upgraded: list[str], failures: list[tuple[str, str, str]], skipped: int,
                  elapsed: float, downloaded: int, freed: str, interrupted: bool,
-                 exit_code: int) -> dict:
+                 exit_code: int, outdated: list[Entry] | None = None,
+                 dry_run: bool = False) -> dict:
     return {
         "version": VERSION,
         "timestamp": datetime.datetime.now().isoformat(timespec="seconds"),
+        "dry_run": dry_run,
+        "outdated": [e.as_dict() for e in outdated or []],
         "upgraded": upgraded,
         "failures": [{"kind": k, "name": n, "error": e} for k, n, e in failures],
         "skipped": skipped,
@@ -1677,9 +1938,12 @@ def finish_reporting(ctx: Ctx, record: dict) -> None:
     if ctx.args.log_json and not ctx.args.dry_run:
         write_history(record)
     if ctx.args.json:
-        json.dump(record, sys.stdout, indent=2)
-        sys.stdout.write("\n")
-        sys.stdout.flush()
+        try:
+            json.dump(record, sys.stdout, indent=2)
+            sys.stdout.write("\n")
+            sys.stdout.flush()
+        except BrokenPipeError:
+            silence_stream(sys.stdout)
 
 
 if __name__ == "__main__":

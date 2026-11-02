@@ -28,9 +28,9 @@ python3 brewmaster.py [OPTIONS]
 
 | Flag | Default | Description |
 | --- | --- | --- |
-| `--check-only` | `false` | Report outdated packages without upgrading (exit 3 if any found) |
+| `--check-only` | `false` | Report outdated packages without upgrading (exit 3 if any found); never takes a backup |
 | `--dry-run` | `false` | Simulate all commands without executing them |
-| `--backup` | `false` | Snapshot state to a `.Brewfile` first; keeps the 5 newest |
+| `--backup` | `false` | Snapshot state to a `.Brewfile` once an upgrade is confirmed; keeps the 5 newest |
 | `--no-update` | `false` | Skip `brew update` entirely |
 | `--force-update` | `false` | Run `brew update` even if it ran within the last hour |
 | `--no-cleanup` | `false` | Skip the `brew cleanup` step at the end of the run |
@@ -54,8 +54,8 @@ python3 brewmaster.py [OPTIONS]
 | --- | --- | --- |
 | `--color {auto,always,never}` | `auto` | Colorise output |
 | `--ascii` | `false` | ASCII-only output — no box drawing or emoji |
-| `-q`, `--quiet` | `false` | Print only warnings and errors |
-| `-v`, `--verbose` | `false` | Stream raw brew output instead of progress indicators |
+| `-q`, `--quiet` | `false` | Print only warnings and errors (including any failed step) |
+| `-v`, `--verbose` | `false` | Echo raw brew output instead of progress indicators; failure reasons are still captured |
 | `--json` | `false` | Print a machine-readable run summary to stdout (the UI moves to stderr) |
 | `--log-json` | `false` | Append a JSON record per run to `~/.brewmaster_history.jsonl` |
 | `--history [N]` | `15` | Show the last N recorded runs and exit |
@@ -146,7 +146,10 @@ truncation never splits a double-width character in half.
 
 Every one of these degrades on its own. A non-TTY, `NO_COLOR`, `TERM=dumb`, or
 a non-UTF-8 stream drops colors, the live line, or the box-drawing characters
-independently — the content is never lost. `--color` and `--ascii` force the
+independently — the content is never lost, and output that is not going to a
+terminal is not clipped to a width. A reader that closes the pipe early
+(`| head`) neither aborts the run nor changes its exit code. `--color` and
+`--ascii` force the
 decision, `--quiet` prints only warnings and errors, and `--verbose` streams
 raw brew output instead of the progress display.
 
@@ -186,9 +189,14 @@ default 600s) it is recorded as a failure rather than stalling the run. Errors
 that will fail identically every time — "no available formula", "is not
 installed", a cask that needs a password — are not retried at all.
 
-Upgrades get `/dev/null` on stdin, so a cask that demands an interactive sudo
-password fails immediately with a clear error instead of hanging until the
-timeout.
+Subprocesses get `/dev/null` on stdin and no controlling terminal, so a cask
+that demands an interactive sudo password fails immediately with a clear error
+instead of hanging until the timeout, and the run names the command to run by
+hand. That includes a cached `sudo` ticket, which is tied to the terminal.
+
+Each subprocess leads its own process group. A timeout or interrupt sends
+SIGTERM to the whole group and SIGKILL after 5 seconds, so no `curl` or `ruby`
+survives holding Homebrew's locks and failing the next attempt.
 
 ### Nothing Fatal That Shouldn't Be
 
@@ -211,15 +219,21 @@ or `none`. Selecting implies consent — no second confirmation prompt.
 
 ### Pin Awareness
 
-Reads `brew list --pinned` and automatically skips pinned formulae. If the
-pinned-package query fails, the run continues without pin protection.
+Reads `brew list --pinned` and the `pinned` field of `brew outdated`, and
+automatically skips pinned formulae, including tapped ones. A pin only ever
+applies to the formula: a cask that shares its name is still upgraded.
+
+`--skip`, `--only` and pins all match a tapped package by its short name as well
+as by `user/tap/name`. A formula and a cask with the same name are tracked and
+upgraded separately, with an explicit `--formula` or `--cask`.
 
 ### Config File
 
 `~/.brewmasterrc.json` supplies defaults for any of `skip`, `only`, `greedy`,
 `notify`, `backup`, `jobs`, `retries`, `timeout`, `log_json`, `no_cleanup`,
-`no_prefetch`, `color`, and `ascii`. Command-line flags override it; unknown
-or mistyped keys warn and are ignored; `--no-config` skips the file entirely.
+`no_prefetch`, `color`, and `ascii`. Command-line flags override it, so `--only
+foo` beats `foo` in the configured `skip` list; unknown or mistyped keys warn
+and are ignored; `--no-config` skips the file entirely.
 
 ```json
 {
@@ -231,18 +245,21 @@ or mistyped keys warn and are ignored; `--no-config` skips the file entirely.
 
 ### Bundle Backup with Pruning
 
-`--backup` runs `brew bundle dump` before any upgrades, saving to
-`~/.brewmaster_backup_YYYYMMDD_HHMMSS.Brewfile` (mode 0600) and pruning to the
-5 newest snapshots. A failed dump warns and writes nothing.
+`--backup` runs `brew bundle dump` immediately before the first upgrade, saving
+to `~/.brewmaster_backup_YYYYMMDD_HHMMSS.Brewfile` (mode 0600) and pruning to
+the 5 newest snapshots. Runs that upgrade nothing take no snapshot, so they
+cannot rotate a useful one away. A failed dump warns and writes nothing.
 
 Restore with: `brew bundle install --file=~/.brewmaster_backup_<timestamp>.Brewfile`
 
 ### Security Hardening
 
 - `brew` is resolved once to an absolute path; a warning is printed if it lives
-  outside `/opt/homebrew/bin` or `/usr/local/bin` (PATH-hijack detection).
+  outside `/opt/homebrew/bin` or `/usr/local/bin` (PATH-hijack detection). If it
+  is not on `PATH` at all, as under cron or launchd, those two locations are used.
 - Package names are validated against brew's naming alphabet before reaching
-  any subprocess.
+  any subprocess. They must start with a letter or digit, so none can be read as
+  an option, and may not contain `..`.
 - The log, history, lock, and backup files are all created mode `0600`.
 - Notification text is escaped before reaching `osascript`.
 - Subprocesses get no inherited stdin.
@@ -259,12 +276,15 @@ failures, skipped, elapsed, bytes downloaded, space freed, exit code) to
 `~/.brewmaster_history.jsonl`, trimmed to the newest 500 runs. `--history`
 renders those records as a table. `--json` prints the same record for the
 current run to stdout, with the human UI redirected to stderr so the two never
-mix.
+mix, on every path that gets as far as a result: `--check-only` and canceled
+runs included. The record's `outdated` list holds what was selected, and
+`dry_run` is `true` when nothing was executed, in which case `upgraded` is empty.
 
 ### Clean Interrupts and Cron Safety
 
-Ctrl-C or SIGTERM mid-upgrade prints "N upgraded, N failed, N not attempted",
-cancels pending downloads, and exits 130. In a non-TTY session (cron, launchd)
+Ctrl-C, SIGTERM or SIGHUP mid-upgrade stops every running subprocess, prints
+"N upgraded, N failed, N not attempted", cancels pending downloads, and exits
+130. A signal the tool was started with ignored (`nohup`) stays ignored. In a non-TTY session (cron, launchd)
 without `-y`, the tool exits 1 immediately instead of hanging on the prompt.
 
 ### macOS Notifications
@@ -285,6 +305,6 @@ the number upgraded or failed. Silently skipped off macOS.
 ## Requirements
 
 - Python 3.10+, standard library only
-- Homebrew installed and available as `brew` in `PATH`
+- Homebrew installed: `brew` in `PATH`, or in `/opt/homebrew/bin` or `/usr/local/bin`
 - macOS (notifications require `osascript`; the lock requires a POSIX `flock`)
 - `brew bundle` tap for `--backup` (included with Homebrew by default)

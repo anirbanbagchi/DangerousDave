@@ -1,4 +1,4 @@
-.TH PAKMAN.PY 1 "2026-09-12" "3.0.0" "User Commands"
+.TH PAKMAN.PY 1 "2026-11-01" "3.1.0" "User Commands"
 .SH NAME
 PakMan.py \- a graphical, fast, careful Python package updater
 .SH SYNOPSIS
@@ -68,8 +68,10 @@ and
 .SS Behaviour
 .TP
 .B \-\-check\-only
-List outdated packages and exit without upgrading. Exits with status 3 if any
-were found.
+List outdated packages and exit without upgrading. Read-only: takes no lock and
+ignores
+.BR \-\-upgrade\-pip .
+Exits with status 3 if any were found.
 .TP
 .B \-\-dry\-run
 Print every command that would be executed without running any of them.
@@ -80,7 +82,10 @@ Upgrade pip itself before upgrading packages. A failure here is reported and
 the run continues; the pip already installed can still do the work.
 .TP
 .B \-\-pre
-Include pre-release versions when upgrading.
+Include pre-release versions when finding and installing upgrades. The outdated
+check then uses pip, because
+.B uv pip list
+cannot ask for them.
 .TP
 .B \-\-only\-binary
 Refuse source distributions by passing
@@ -95,9 +100,8 @@ further warning if the interpreter is marked externally managed (PEP 668).
 .B \-\-audit
 Run
 .B pip-audit
-after upgrading. Its absence is detected with
-.B pip show
-and reported, not treated as a failure.
+after upgrading. Its absence is detected by looking for the module and is
+reported, not treated as a failure.
 .TP
 .B \-\-no\-rollback
 Skip writing the rollback snapshot file.
@@ -171,10 +175,15 @@ Print only warnings and errors. Mutually exclusive with
 .BR \-\-interactive .
 .TP
 .BR \-v ", " \-\-verbose
-Stream raw pip output instead of progress indicators.
+Echo raw pip output instead of progress indicators. Failure reasons are still
+captured.
 .TP
 .B \-\-json
-Print the outdated package list as JSON to stdout and exit without upgrading.
+Print the outdated package list as JSON to stdout, after
+.BR \-\-only " and " \-\-exclude ,
+and exit without upgrading. Exits 0 unless combined with
+.BR \-\-check\-only ,
+which exits 3 if anything is outdated.
 .TP
 .B \-\-summary\-json
 Print a machine-readable summary of the completed run to stdout. Distinct from
@@ -233,7 +242,19 @@ happened to resolve are reported separately.
 Everything is first attempted in one resolver run, which is dramatically faster
 than N runs and the only way the resolver can satisfy packages that constrain
 each other. If the batch fails, each package is upgraded individually so a
-single bad package cannot block the rest.
+single bad package cannot block the rest, unless the error is about the
+environment itself (externally managed, read-only filesystem), when every
+package is reported as failed without further attempts.
+.SS Held-Back Packages and Editable Installs
+pip exits 0 when the resolver keeps a package where it is, so installed versions
+are compared afterwards: such packages are reported as held back, not upgraded.
+Editable installs are left out of the outdated list, because an upgrade would
+replace the working copy with whatever PyPI has under that name.
+.SS Environments Without pip
+A venv created by uv has no pip. PakMan then uses uv for the outdated check,
+installs, the dependency check, and
+.BR \-\-export .
+With neither pip nor uv it exits 1.
 .SS Pipelined Parallel Prefetch
 On the per-package path, wheels download on a thread pool while installs run.
 Downloads are submitted in install order and the install loop waits only on the
@@ -246,8 +267,10 @@ An flock on
 .I ~/.pakman.lock
 refuses to start a second run while one is in progress: two pip processes
 writing the same site-packages is the classic way to end up with a
-half-installed distribution. If the lock file cannot be created at all, the run
-continues with a warning rather than refusing.
+half-installed distribution.
+.BR \-\-dry\-run ", " \-\-check\-only " and " \-\-json
+never take it, because they only read. If the lock file cannot be created at
+all, the run continues with a warning rather than refusing.
 .SS Rollback Snapshots
 Current versions are pinned to
 .I ~/.pakman_rollback_YYYYMMDD_HHMMSS.txt
@@ -258,15 +281,17 @@ lists what is available.
 .SS Security Hardening
 Package names are validated against PEP 508 naming rules before reaching any
 subprocess. Log, history, lock and rollback files are created mode 0600, and
-the log rotates at 2 MB keeping 3 generations. Subprocesses inherit no stdin
-and run with
+the log rotates at 2 MB keeping 3 generations. Subprocesses inherit no stdin,
+have no controlling terminal, and run with
 .BR PIP_NO_INPUT=1 ,
-so pip never stops to ask a question there is nothing to answer with. Every
+so pip never stops to ask a question there is nothing to answer with. Each runs
+in its own process group, and a timeout or interrupt stops the whole group. Every
 subprocess call writes an AUDIT line with the exact shell-quoted command, exit
 code, and duration to the log.
 .SS Clean Interrupts and Cron Safety
-Ctrl-C or SIGTERM mid-upgrade prints how many packages were upgraded, failed,
-and not attempted, cancels pending downloads, then exits 130. In a non-TTY
+Ctrl-C, SIGTERM or SIGHUP mid-upgrade stops every running subprocess, prints how
+many packages were upgraded, failed, and not attempted, cancels pending
+downloads, then exits 130. In a non-TTY
 session without
 .BR \-y ,
 the tool exits 1 immediately instead of hanging on the prompt.
@@ -274,7 +299,7 @@ the tool exits 1 immediately instead of hanging on the prompt.
 .I ~/.pakmanrc.json
 supplies defaults for any of
 .BR exclude ", " only ", " pre ", " only_binary ", " require_venv ", " audit ,
-.BR no_uv ", " uv ", " no_rollback ", " no_batch ", " notify ", " jobs ,
+.BR no_uv ", " uv ", " no_rollback ", " no_batch ", " no_prefetch ", " notify ", " jobs ,
 .BR retries ", " timeout ", " log_json ", " color ", " ascii ", and " export .
 Command-line flags override it; unknown or mistyped keys warn and are ignored.
 .PP

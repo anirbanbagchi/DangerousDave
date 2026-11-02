@@ -29,10 +29,10 @@ invoke it with that virtualenv's Python: `path/to/venv/bin/python PakMan.py`.
 
 | Flag | Default | Description |
 | --- | --- | --- |
-| `--check-only` | `false` | List outdated packages and exit (exit 3 if any found) |
+| `--check-only` | `false` | List outdated packages and exit (exit 3 if any found); read-only, so no lock and no `--upgrade-pip` |
 | `--dry-run` | `false` | Print commands that would run without executing them |
 | `--upgrade-pip` | `false` | Upgrade pip itself first (a failure here no longer aborts the run) |
-| `--pre` | `false` | Include pre-release versions when upgrading |
+| `--pre` | `false` | Include pre-release versions when finding and installing upgrades (the outdated check uses pip, since `uv pip list` cannot) |
 | `--only-binary` | `false` | Refuse source distributions (no sdist build code executes) |
 | `--require-venv` | `false` | Refuse to run outside a virtual environment |
 | `--audit` | `false` | Run `pip-audit` after upgrading (skipped if not installed) |
@@ -60,9 +60,9 @@ invoke it with that virtualenv's Python: `path/to/venv/bin/python PakMan.py`.
 | --- | --- | --- |
 | `--color {auto,always,never}` | `auto` | Colorise output |
 | `--ascii` | `false` | ASCII-only output — no box drawing or emoji |
-| `-q`, `--quiet` | `false` | Print only warnings and errors |
-| `-v`, `--verbose` | `false` | Stream raw pip output instead of progress indicators |
-| `--json` | `false` | Output the **outdated package list** as JSON and exit |
+| `-q`, `--quiet` | `false` | Print only warnings and errors (including any failed step) |
+| `-v`, `--verbose` | `false` | Echo raw pip output instead of progress indicators; failure reasons are still captured |
+| `--json` | `false` | Output the **outdated package list** as JSON and exit, after `--only`/`--exclude` |
 | `--summary-json` | `false` | Print a machine-readable **run summary** to stdout when the run ends |
 | `--log-json` | `false` | Append a JSON record per run to `~/.pakman_history.jsonl` |
 | `--history [N]` | `15` | Show the last N recorded runs and exit |
@@ -72,6 +72,8 @@ invoke it with that virtualenv's Python: `path/to/venv/bin/python PakMan.py`.
 `--json` and `--summary-json` are different things: the first dumps what is
 outdated and exits without upgrading, the second reports what a completed run
 did. Both move the human-readable UI to stderr so stdout stays parseable.
+`--json` alone exits `0`; add `--check-only` to get exit `3` when something is
+outdated.
 
 ## Exit Codes
 
@@ -85,7 +87,7 @@ did. Both move the human-readable UI to stderr so stdout stays parseable.
 
 A run that introduces new dependency conflicts still exits `0` — no package
 *failed*. The conflicts are reported in the summary, the log, and the JSON
-record.
+record. The same goes for a package the resolver held back.
 
 ## Examples
 
@@ -170,7 +172,10 @@ truncation never splits a double-width character in half.
 
 Everything degrades on its own. A non-TTY, `NO_COLOR`, `TERM=dumb`, or a
 non-UTF-8 stream drops colors, the live line, or the box-drawing characters
-independently — the content is never lost. `--color` and `--ascii` force the
+independently — the content is never lost, and output that is not going to a
+terminal is not clipped to a width. A reader that closes the pipe early
+(`| head`) neither aborts the run nor changes its exit code. `--color` and
+`--ascii` force the
 decision, `--quiet` prints only warnings and errors, and `--verbose` streams
 raw pip output instead of the progress display.
 
@@ -189,7 +194,22 @@ it resolved:
 ```
 
 A conflict that was already there before you started is not reported as though
-you caused it.
+you caused it. If the check itself cannot run, the run says so rather than
+reporting a healthy environment, and the JSON record sets
+`dependencies_verified` to `false`.
+
+### Held-Back Packages
+
+pip exits `0` when the resolver keeps a package where it is, because of another
+package's requirements or a constraints file. After installing, PakMan compares
+installed versions against the starting ones, so those packages are listed as
+**held back** (`held_back` in the JSON record) and not counted as upgraded.
+
+### Editable Installs
+
+Editable installs are left out of the outdated list entirely (`--exclude-editable`).
+`install --upgrade` would otherwise replace a working copy with whatever PyPI
+has under that name.
 
 ### Batch Upgrade with Per-Package Fallback
 
@@ -197,7 +217,9 @@ Everything is first attempted in a single resolver run — dramatically faster
 than N runs, and the only way the resolver can satisfy packages that constrain
 each other. If the batch fails, PakMan falls back to upgrading each package
 individually so a single bad package cannot block the rest, and the failure is
-attributed to the package that actually caused it.
+attributed to the package that actually caused it. The exception is an error
+about the environment itself (externally managed, read-only filesystem): nothing
+can install there, so every package is reported as failed without N more attempts.
 
 ### uv
 
@@ -205,6 +227,10 @@ When `uv` is on `PATH` it is used for the outdated check by default (it is far
 faster than `pip list --outdated`). `--uv` additionally routes the *installs*
 through `uv pip install`, which is typically several times faster than pip.
 `--no-uv` disables it entirely.
+
+A venv created by uv has no pip. PakMan detects that and uses uv for everything:
+the outdated check, installs, the dependency check, and `--export`. With neither
+pip nor uv it exits 1 and says so.
 
 ### Pipelined Parallel Prefetch
 
@@ -220,7 +246,8 @@ downloads in parallel already, and does not read pip's cache).
 An `flock` on `~/.pakman.lock` refuses to start a second run while one is in
 progress. Two pip processes writing the same `site-packages` is the classic way
 to end up with a half-installed distribution and no way to tell which run did
-it. `--no-lock` overrides; `--dry-run` never takes the lock. If the lock file
+it. `--no-lock` overrides; `--dry-run`, `--check-only` and `--json` never take
+the lock, because they only read. If the lock file
 cannot be created at all, the run continues with a warning rather than
 refusing.
 
@@ -247,9 +274,9 @@ available. `--no-rollback` skips the snapshot.
 
 ### Vulnerability Audit and Freeze Export
 
-`--audit` runs `pip-audit` after upgrading, detecting its absence properly via
-`pip show` rather than by matching an error string. `--export FILE` writes a
-`pip freeze` of the resulting environment.
+`--audit` runs `pip-audit` after upgrading, detecting its absence by looking
+for the module rather than by matching an error string. `--export FILE` writes
+a `pip freeze` of the resulting environment.
 
 ### Security Hardening
 
@@ -257,8 +284,12 @@ available. `--no-rollback` skips the snapshot.
   subprocess.
 - The log, history, lock, and rollback files are all created mode `0600`.
 - Notification text is escaped before reaching `osascript`.
-- Subprocesses get no inherited stdin, and `PIP_NO_INPUT=1` is set, so pip
-  never stops to ask a question there is nothing to answer with.
+- Subprocesses get no inherited stdin and no controlling terminal, and
+  `PIP_NO_INPUT=1` is set, so pip never stops to ask a question there is nothing
+  to answer with.
+- Each subprocess leads its own process group. A timeout or interrupt sends
+  SIGTERM to the whole group and SIGKILL after 5 seconds, so no build process
+  survives to keep writing to `site-packages`.
 
 ### Audit Log and JSON History
 
@@ -266,18 +297,21 @@ available. `--no-rollback` skips the snapshot.
 exact shell-quoted command, its exit code, and its duration to `~/.pakman.log`.
 The log rotates at 2 MB, keeping 3 generations, all at mode 0600.
 
-With `--log-json`, each run also appends one structured record (upgraded,
-failures, excluded, conflicts, new conflicts, rollback path, installer, elapsed,
+With `--log-json`, each run also appends one structured record (outdated,
+upgraded, held back, failures, excluded, conflicts, new conflicts, rollback path, installer, elapsed,
 exit code) to `~/.pakman_history.jsonl`, trimmed to the newest 500 runs.
-`--history` renders those records as a table.
+`--history` renders those records as a table. `dry_run` is `true` in the record
+when nothing was executed, in which case `upgraded` is empty.
 
 ### Config File
 
 `~/.pakmanrc.json` supplies defaults for any of `exclude`, `only`, `pre`,
 `only_binary`, `require_venv`, `audit`, `no_uv`, `uv`, `no_rollback`,
-`no_batch`, `notify`, `jobs`, `retries`, `timeout`, `log_json`, `color`,
-`ascii`, and `export`. Command-line flags override it; unknown or mistyped keys
-warn and are ignored; `--no-config` skips the file entirely.
+`no_batch`, `no_prefetch`, `notify`, `jobs`, `retries`, `timeout`, `log_json`,
+`color`, `ascii`, and `export`. Command-line flags override it, so `--no-uv`
+beats a configured `uv`, and `--only foo` beats `foo` in the configured `exclude`
+list; unknown or mistyped keys warn and are ignored; `--no-config` skips the
+file entirely.
 
 ```json
 {
@@ -289,8 +323,9 @@ warn and are ignored; `--no-config` skips the file entirely.
 
 ### Clean Interrupts and Cron Safety
 
-Ctrl-C or SIGTERM mid-upgrade prints "N upgraded, N failed, N not attempted",
-cancels pending downloads, and exits 130. In a non-TTY session (cron, launchd)
+Ctrl-C, SIGTERM or SIGHUP mid-upgrade stops every running subprocess, prints
+"N upgraded, N failed, N not attempted", cancels pending downloads, and exits
+130. A signal the tool was started with ignored (`nohup`) stays ignored. In a non-TTY session (cron, launchd)
 without `-y`, the tool exits 1 immediately instead of hanging on the prompt.
 
 ### macOS Notifications
@@ -311,7 +346,7 @@ upgrades, failures, or new conflicts. Silently skipped off macOS.
 ## Requirements
 
 - Python 3.10+, standard library only
-- pip available as `python -m pip`
+- pip available as `python -m pip`, or `uv` on `PATH` for an environment without pip
 - macOS for `--notify` (`osascript`); the lock requires a POSIX `flock`
 - Optional: [`uv`](https://github.com/astral-sh/uv) for the fast outdated check and `--uv` installs
 - Optional: `pip-audit` for `--audit`
