@@ -1,4 +1,4 @@
-.TH BREWMASTER.PY 1 "2026-09-12" "3.0.0" "User Commands"
+.TH BREWMASTER.PY 1 "2026-11-01" "3.1.0" "User Commands"
 .SH NAME
 brewmaster.py \- a graphical, fast, careful Homebrew upgrader
 .SH SYNOPSIS
@@ -86,18 +86,20 @@ Disable greedy cask checking.
 .SS Behaviour
 .TP
 .B \-\-check\-only
-Report outdated packages with version diffs and exit without upgrading.
-Exits with status 3 if any outdated packages were found.
+Report outdated packages with version diffs and exit without upgrading. Never
+takes a backup. Exits with status 3 if any outdated packages were found.
 .TP
 .B \-\-dry\-run
 Print every command that would be executed without running any of them.
 Skips the confirmation prompt and the instance lock.
 .TP
 .B \-\-backup
-Before upgrading, dump the current Homebrew state to a timestamped Brewfile at
+Immediately before the first upgrade, dump the current Homebrew state to a
+timestamped Brewfile at
 .IR ~/.brewmaster_backup_YYYYMMDD_HHMMSS.Brewfile
-(mode 0600). The five newest backups are kept; older ones are pruned. A failed
-dump prints a warning and writes nothing.
+(mode 0600). The five newest backups are kept; older ones are pruned. Runs that
+upgrade nothing take no backup. A failed dump prints a warning and writes
+nothing.
 Restore with:
 .RS
 .EX
@@ -180,11 +182,14 @@ Print only warnings and errors. Mutually exclusive with
 .BR \-\-interactive .
 .TP
 .BR \-v ", " \-\-verbose
-Stream raw brew output instead of progress indicators.
+Echo raw brew output instead of progress indicators. Failure reasons are still
+captured.
 .TP
 .B \-\-json
-Print a machine-readable JSON summary of the run to stdout; all human-readable
-output moves to stderr so the two never mix.
+Print a machine-readable JSON summary of the run to stdout, including under
+.B \-\-check\-only
+and on a canceled run; all human-readable output moves to stderr so the two
+never mix.
 .TP
 .B \-\-log\-json
 Append one structured JSON record per run (upgraded packages, failures,
@@ -257,19 +262,25 @@ Free space on the Homebrew prefix is checked before upgrading. A run that
 cannot fit its queued downloads is refused; a tight one warns and proceeds.
 .SS Security Hardening
 Package names are validated against brew's naming alphabet before reaching any
-subprocess. Log, history, lock and backup files are created mode 0600, and the
-log rotates at 2 MB keeping 3 generations. Subprocesses inherit no stdin, so a
-cask demanding an interactive password fails fast instead of hanging. Every
-subprocess call writes an AUDIT line with the exact shell-quoted command, exit
+subprocess; they must start with a letter or digit and may not contain "..".
+Log, history, lock and backup files are created mode 0600, and the log rotates
+at 2 MB keeping 3 generations. Subprocesses inherit no stdin and have no
+controlling terminal, so a cask demanding an interactive password fails fast
+instead of hanging, even with a cached sudo ticket. Each runs in its own process
+group, and a timeout or interrupt stops the whole group. Every subprocess call
+writes an AUDIT line with the exact shell-quoted command, exit
 code, and duration to the log.
 .SS Pin Awareness
 Reads
 .B brew list --pinned
-and automatically skips pinned formulae. If the pinned-package query fails, a
-warning is printed and the run continues.
+and the pinned field of
+.BR "brew outdated" ,
+and automatically skips pinned formulae, including tapped ones. A cask sharing a
+pinned formula's name is still upgraded.
 .SS Clean Interrupts and Cron Safety
-Ctrl-C or SIGTERM mid-upgrade prints how many packages were upgraded, failed,
-and not attempted, cancels pending downloads, then exits 130. In a non-TTY
+Ctrl-C, SIGTERM or SIGHUP mid-upgrade stops every running subprocess, prints how
+many packages were upgraded, failed, and not attempted, cancels pending
+downloads, then exits 130. In a non-TTY
 session without
 .BR \-y ,
 the tool exits 1 immediately instead of hanging on the prompt.
@@ -377,7 +388,13 @@ or unset disables color and the live progress line under
 .SH REQUIREMENTS
 Python 3.10 or later (standard library only), Homebrew (
 .I https://brew.sh
-), macOS.
+), macOS. If
+.B brew
+is not on PATH, as under cron,
+.I /opt/homebrew/bin
+and
+.I /usr/local/bin
+are tried.
 .PP
 The
 .B \-\-notify

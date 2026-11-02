@@ -10,9 +10,11 @@ Python 3.10+, standard library only.
 from __future__ import annotations
 
 import argparse
+import codecs
 import datetime
 import fcntl
 import fnmatch
+import importlib.util
 import json
 import logging
 import logging.handlers
@@ -32,7 +34,7 @@ from concurrent.futures import Future, ThreadPoolExecutor
 from contextlib import contextmanager
 from pathlib import Path
 
-VERSION = "3.0.0"
+VERSION = "3.1.0"
 
 HOME = Path.home()
 LOG_PATH = HOME / ".pakman.log"
@@ -153,6 +155,9 @@ GLYPHS_ASCII = {
 SPINNER_UNICODE = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 SPINNER_ASCII = "|/-\\"
 
+# A pipe or log file has no edge to fit: clipping there would simply lose text.
+NON_TTY_WIDTH = 10_000
+
 
 def char_width(ch: str) -> int:
     """Terminal columns one character occupies.
@@ -242,6 +247,16 @@ def human_time(secs: float) -> str:
     return f"{secs // 3600}h {(secs % 3600) // 60:02d}m"
 
 
+def silence_stream(stream) -> None:
+    """Point a stream whose reader has gone at /dev/null."""
+    try:
+        devnull = os.open(os.devnull, os.O_WRONLY)
+        os.dup2(devnull, stream.fileno())
+        os.close(devnull)
+    except (OSError, ValueError):
+        pass
+
+
 def _want_color(mode: str, stream) -> bool:
     if mode == "never":
         return False
@@ -293,7 +308,7 @@ class UI:
     @property
     def width(self) -> int:
         if not self.tty:
-            return 100
+            return NON_TTY_WIDTH
         return max(46, min(120, shutil.get_terminal_size((100, 24)).columns))
 
     def c(self, text: str, *codes: str) -> str:
@@ -306,17 +321,31 @@ class UI:
         """Write through, stepping around the live line if one is active."""
         with self.lock:
             live = self.live
-            if live is not None:
-                live.clear()
-            self.stream.write(text)
-            if live is not None:
-                live.draw()
-            self.stream.flush()
+            try:
+                if live is not None:
+                    live.clear()
+                self.stream.write(text)
+                if live is not None:
+                    live.draw()
+                self.stream.flush()
+            except BrokenPipeError:
+                # The reader went away (`| head`). That must not abort a run
+                # part-way through or change its exit code.
+                silence_stream(self.stream)
 
     def out(self, text: str = "") -> None:
         if self.quiet:
             return
         self._raw(clip(text, self.width) + "\n")
+
+    def always(self, text: str) -> None:
+        """Warnings and errors are worth seeing even under --quiet."""
+        self._raw(clip(text, self.width) + "\n")
+
+    def passthrough(self, text: str) -> None:
+        """Raw subprocess output, streamed under --verbose."""
+        if not self.quiet:
+            self._raw(text)
 
     def blank(self) -> None:
         self.out("")
@@ -335,12 +364,10 @@ class UI:
         self.out(f"  {self.c(self.g['ok'], GREEN)} {text}")
 
     def warn(self, text: str) -> None:
-        self.out(f"  {self.c(self.g['warn'], YELLOW)} {self.c(text, YELLOW)}")
+        self.always(f"  {self.c(self.g['warn'], YELLOW)} {self.c(text, YELLOW)}")
 
     def error(self, text: str) -> None:
-        # Errors are worth seeing even under --quiet.
-        line = f"  {self.c(self.g['fail'], RED)} {self.c(text, RED)}"
-        self._raw(clip(line, self.width) + "\n")
+        self.always(f"  {self.c(self.g['fail'], RED)} {self.c(text, RED)}")
 
     # -- boxes -------------------------------------------------------------
 
@@ -373,17 +400,6 @@ class UI:
         width = min(self.width - 4, max(vislen(x) for x in body))
         width = max(width, 34)
         self._box([clip(x, width) for x in body], width, color)
-
-    def rule(self, title: str = "", color: str = GREY) -> None:
-        if self.quiet:
-            return
-        g = self.g["h"]
-        if not title:
-            self.out(self.c(g * (self.width - 2), color))
-            return
-        label = f" {title} "
-        fill = max(3, self.width - 2 - len(label) - 2)
-        self.out(self.c(g * 2 + label + g * fill, color))
 
     # -- tables ------------------------------------------------------------
 
@@ -521,7 +537,11 @@ class Status(LiveLine):
                 self.ui.stream.flush()
         mark = self.ui.c(self.ui.g[glyph], color)
         elapsed = time.monotonic() - self.started
-        self.ui.out(f"  {mark} {text} {self.ui.c(f'({elapsed:.1f}s)', GREY)}")
+        line = f"  {mark} {text} {self.ui.c(f'({elapsed:.1f}s)', GREY)}"
+        if glyph == "ok":
+            self.ui.out(line)
+        else:
+            self.ui.always(line)
 
 
 class Bar(LiveLine):
@@ -612,9 +632,11 @@ class Ctx:
         self.env = env
         self.uv = uv
         self.python = sys.executable
+        # A uv-created venv has no pip at all, so uv has to do everything there.
+        self.has_pip = importlib.util.find_spec("pip") is not None
         # uv is used for the outdated check whenever it is present; it drives
-        # the installs only when --uv asks for it.
-        self.use_uv_install = bool(uv and getattr(args, "uv", False))
+        # the installs only when --uv asks for it, or when there is no pip.
+        self.use_uv_install = bool(uv and (getattr(args, "uv", False) or not self.has_pip))
 
     def pip_cmd(self, *parts: str) -> list[str]:
         return [self.python, "-m", "pip", *parts]
@@ -623,13 +645,95 @@ class Ctx:
         assert self.uv is not None
         return [self.uv, "pip", *parts, "--python", self.python]
 
+    def query_cmd(self, *parts: str) -> list[str]:
+        """A subcommand pip and uv share: pip where it exists, otherwise uv."""
+        return self.pip_cmd(*parts) if self.has_pip else self.uv_cmd(*parts)
+
+    def undo_hint(self, rollback: Path) -> str:
+        tool = "pip" if self.has_pip else "uv pip"
+        return f"undo with: {tool} install -r {rollback}"
+
+
+# Every running child, so a signal can stop them all. Each one leads its own
+# process group: a timed-out or interrupted upgrade must not leave a curl or
+# ruby behind, still holding a package manager's locks.
+_children: set[subprocess.Popen] = set()
+_children_lock = threading.RLock()  # re-entrant: the signal handler takes it too
+_stopping = False
+KILL_GRACE = 5.0            # seconds between SIGTERM and SIGKILL
+READER_GRACE = 5.0          # seconds to drain output once a child has exited
+
+
+def _signal_group(proc: subprocess.Popen, sig: int) -> None:
+    try:
+        os.killpg(proc.pid, sig)
+    except OSError:
+        pass
+
+
+def stop_group(proc: subprocess.Popen) -> None:
+    """Terminate a child's whole process group, escalating to SIGKILL."""
+    _signal_group(proc, signal.SIGTERM)
+    try:
+        proc.wait(timeout=KILL_GRACE)
+    except subprocess.TimeoutExpired:
+        pass
+    finally:
+        _signal_group(proc, signal.SIGKILL)
+
+
+def _kill_children() -> None:
+    with _children_lock:
+        procs = list(_children)
+    for proc in procs:
+        _signal_group(proc, signal.SIGKILL)
+
+
+def stop_children() -> None:
+    """Stop every running child and refuse to start more."""
+    global _stopping
+    with _children_lock:
+        _stopping = True
+        procs = list(_children)
+    for proc in procs:
+        _signal_group(proc, signal.SIGTERM)
+    if procs:
+        # Worker threads are blocked on these; the interpreter cannot exit
+        # until they return, so a child ignoring SIGTERM must not be allowed
+        # to hold the whole run open.
+        timer = threading.Timer(KILL_GRACE, _kill_children)
+        timer.daemon = True
+        timer.start()
+
+
+def _pump(pipe, sink: list[str], echo) -> None:
+    """Drain one child pipe. Tools can print anything, so bad UTF-8 is replaced."""
+    decoder = codecs.getincrementaldecoder("utf-8")("replace")
+    try:
+        for chunk in iter(lambda: pipe.read(65536), b""):
+            text = decoder.decode(chunk)
+            sink.append(text)
+            if echo is not None and text:
+                echo(text)
+    except (OSError, ValueError):
+        pass
+
+
+def _join_readers(readers: list[threading.Thread]) -> None:
+    """Wait for output to drain. A daemon the child left running can hold a pipe
+    open indefinitely, and that must not stall the run."""
+    deadline = time.monotonic() + READER_GRACE
+    for reader in readers:
+        reader.join(timeout=max(0.0, deadline - time.monotonic()))
+
 
 def run(ctx: Ctx, cmd: list[str], *, timeout: float | None = None,
         stream: bool = False, dry: bool = False) -> Res:
     """Run a command, audit it, and return its result. Never exits the process.
 
-    stdin is /dev/null throughout: a build backend or index that decides to
-    ask a question fails fast instead of hanging until the timeout.
+    stdin is /dev/null and there is no controlling terminal: a build backend or
+    index that decides to ask a question fails fast instead of hanging until
+    the timeout.
     """
     cmd_str = shlex.join(cmd)
 
@@ -638,28 +742,58 @@ def run(ctx: Ctx, cmd: list[str], *, timeout: float | None = None,
         log(f"AUDIT: {cmd_str} -> exit 0 (dry-run, not executed)")
         return Res(0)
 
-    kwargs: dict = {"text": True, "env": ctx.env, "stdin": subprocess.DEVNULL}
-    if not stream:
-        kwargs["capture_output"] = True
-
     started = time.monotonic()
     try:
-        p = subprocess.run(cmd, timeout=timeout, **kwargs)
+        with _children_lock:
+            if _stopping:
+                audit(cmd, EXIT_INTERRUPT, "(not started: interrupted)")
+                return Res(EXIT_INTERRUPT, "", "interrupted")
+            # Its own session, so the whole process tree can be signalled.
+            proc = subprocess.Popen(cmd, env=ctx.env, stdin=subprocess.DEVNULL,
+                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                    bufsize=0, start_new_session=True)
+            _children.add(proc)
     except FileNotFoundError:
         audit(cmd, RC_NOT_FOUND, "(executable not found)")
         return Res(RC_NOT_FOUND, "", f"executable not found: {cmd[0]}")
     except PermissionError as exc:
         audit(cmd, RC_NOT_FOUND, "(permission denied)")
         return Res(RC_NOT_FOUND, "", f"permission denied: {exc}")
-    except subprocess.TimeoutExpired as exc:
+    except OSError as exc:
+        audit(cmd, RC_NOT_FOUND, f"(could not start: {exc})")
+        return Res(RC_NOT_FOUND, "", f"could not start {cmd[0]}: {exc}")
+
+    # Captured even when streaming, so a failure under --verbose still has a reason.
+    echo = ctx.ui.passthrough if stream else None
+    out: list[str] = []
+    err: list[str] = []
+    readers = [threading.Thread(target=_pump, args=(pipe, sink, echo), daemon=True)
+               for pipe, sink in ((proc.stdout, out), (proc.stderr, err))]
+    for reader in readers:
+        reader.start()
+
+    try:
+        rc = proc.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        stop_group(proc)
         secs = time.monotonic() - started
         audit(cmd, RC_TIMEOUT, f"(timed out after {timeout}s)")
-        partial = exc.stdout if isinstance(exc.stdout, str) else ""
-        return Res(RC_TIMEOUT, partial, f"timed out after {timeout}s", secs)
+        _join_readers(readers)
+        return Res(RC_TIMEOUT, "".join(out), f"timed out after {timeout}s", secs)
+    except BaseException:
+        try:
+            stop_group(proc)
+        finally:
+            audit(cmd, EXIT_INTERRUPT, "(interrupted)")
+        raise
+    finally:
+        with _children_lock:
+            _children.discard(proc)
 
+    _join_readers(readers)
     secs = time.monotonic() - started
-    audit(cmd, p.returncode, f"({secs:.1f}s)")
-    return Res(p.returncode, p.stdout or "", p.stderr or "", secs)
+    audit(cmd, rc, f"({secs:.1f}s)")
+    return Res(rc, "".join(out), "".join(err), secs)
 
 
 # --------------------------------------------------------------------------
@@ -726,8 +860,10 @@ def single_instance(ui: UI, enabled: bool):
         yield True
         return
     try:
-        handle = open(LOCK_PATH, "w")
-        os.chmod(LOCK_PATH, 0o600)
+        # Not "w": a run that gets refused must not erase the holder's pid.
+        fd = os.open(LOCK_PATH, os.O_RDWR | os.O_CREAT, 0o600)
+        os.fchmod(fd, 0o600)
+        handle = os.fdopen(fd, "r+")
     except OSError as exc:
         # Not being able to create the lock file at all is a different problem
         # from another run holding it — do not refuse the run over it.
@@ -738,12 +874,16 @@ def single_instance(ui: UI, enabled: bool):
     try:
         fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
     except OSError:
+        holder = handle.read().strip()
         handle.close()
-        ui.error(f"Another PakMan run holds {LOCK_PATH}. Use --no-lock to override.")
+        who = f" (pid {holder})" if holder else ""
+        ui.error(f"Another PakMan run{who} holds {LOCK_PATH}. Use --no-lock to override.")
         log("Refused to start: lock already held.")
         yield False
         return
     try:
+        handle.seek(0)
+        handle.truncate()
         handle.write(f"{os.getpid()}\n")
         handle.flush()
         yield True
@@ -762,10 +902,13 @@ def single_instance(ui: UI, enabled: bool):
 CONFIG_SCHEMA: dict[str, type] = {
     "exclude": list, "only": list, "pre": bool, "only_binary": bool,
     "require_venv": bool, "audit": bool, "no_uv": bool, "uv": bool,
-    "no_rollback": bool, "no_batch": bool, "notify": bool, "jobs": int,
+    "no_rollback": bool, "no_batch": bool, "no_prefetch": bool, "notify": bool, "jobs": int,
     "retries": int, "timeout": int, "log_json": bool, "color": str,
     "ascii": bool, "export": str,
 }
+
+
+COLOR_MODES = ("auto", "always", "never")
 
 
 def load_config(ui: UI) -> dict:
@@ -774,7 +917,7 @@ def load_config(ui: UI) -> dict:
         return {}
     try:
         raw = json.loads(CONFIG_PATH.read_text())
-    except (OSError, json.JSONDecodeError) as exc:
+    except (OSError, ValueError) as exc:  # ValueError: bad JSON or bad UTF-8
         ui.warn(f"Ignoring unreadable config {CONFIG_PATH}: {exc}")
         return {}
     if not isinstance(raw, dict):
@@ -789,6 +932,8 @@ def load_config(ui: UI) -> dict:
             ui.warn(f"Ignoring config key {key!r}: expected {want.__name__}")
         elif want is list and not all(isinstance(v, str) for v in value):
             ui.warn(f"Ignoring config key {key!r}: expected a list of strings")
+        elif key == "color" and value not in COLOR_MODES:
+            ui.warn(f"Ignoring config key 'color': expected one of {', '.join(COLOR_MODES)}")
         else:
             clean[key] = value
     if clean:
@@ -836,27 +981,61 @@ def parse_outdated(payload: str) -> tuple[list[Pkg], str]:
 
 def get_outdated(ctx: Ctx) -> tuple[list[Pkg], str, str]:
     """Outdated packages. Returns (packages, source, error)."""
-    if ctx.uv:
-        res = run(ctx, ctx.uv_cmd("list", "--outdated", "--format=json"), timeout=300)
+    # An editable install is someone's working copy. `install --upgrade` would
+    # replace it with whatever PyPI has under that name, so it never gets listed.
+    query = ("list", "--outdated", "--format=json", "--exclude-editable")
+    # `uv pip list` has no way to ask for pre-releases, so --pre needs pip.
+    if ctx.uv and (not ctx.args.pre or not ctx.has_pip):
+        res = run(ctx, ctx.uv_cmd(*query), timeout=300)
         if res.ok:
             pkgs, err = parse_outdated(res.out)
             if not err:
                 return pkgs, "uv", ""
+        if not ctx.has_pip:
+            return [], "uv", res.message
         log(f"uv outdated check failed ({res.message}); falling back to pip")
 
-    res = run(ctx, ctx.pip_cmd("list", "--outdated", "--format=json"), timeout=600)
+    if ctx.args.pre:
+        query += ("--pre",)
+    res = run(ctx, ctx.pip_cmd(*query), timeout=600)
     if not res.ok:
         return [], "pip", res.message
     pkgs, err = parse_outdated(res.out)
     return pkgs, "pip", err
 
 
-def pip_check(ctx: Ctx) -> list[str]:
-    """Dependency conflicts reported by `pip check`, one per line."""
-    res = run(ctx, ctx.pip_cmd("check"), timeout=300)
+def pip_check(ctx: Ctx) -> list[str] | None:
+    """Dependency conflicts, one per line. None means the check itself failed,
+    which must never be mistaken for a healthy environment."""
+    res = run(ctx, ctx.query_cmd("check"), timeout=300)
     if res.ok:
         return []
-    return sorted(line.strip() for line in res.out.splitlines() if line.strip())
+    if ctx.has_pip:
+        lines = res.out.splitlines()
+    else:
+        # uv reports on stderr, mixed in with its progress lines.
+        lines = [line for line in res.err.splitlines() if line.startswith("The package ")]
+    return sorted(line.strip() for line in lines if line.strip()) or None
+
+
+def normalize_name(name: str) -> str:
+    """PEP 503: Bar_Baz, bar.baz and bar-baz are one project."""
+    return re.sub(r"[-_.]+", "-", name).lower()
+
+
+def installed_versions(ctx: Ctx) -> dict[str, str] | None:
+    """Normalized name -> installed version, or None if that cannot be read."""
+    res = run(ctx, ctx.query_cmd("list", "--format=json"), timeout=300)
+    if not res.ok:
+        return None
+    try:
+        data = json.loads(res.out)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(data, list):
+        return None
+    return {normalize_name(str(item.get("name", ""))): str(item.get("version", ""))
+            for item in data if isinstance(item, dict)}
 
 
 # --------------------------------------------------------------------------
@@ -887,14 +1066,13 @@ def write_rollback(ctx: Ctx, pkgs: list[Pkg]) -> Path | None:
         ctx.ui.warn("No pinnable versions to record; skipping rollback file.")
         return None
     try:
-        path.write_text("\n".join(pinned) + "\n")
-        path.chmod(0o600)
+        write_private(path, "\n".join(pinned) + "\n")
     except OSError as exc:
         ctx.ui.warn(f"Could not write rollback file: {exc}")
         log(f"Rollback write failed: {exc}")
         return None
     ctx.ui.ok(f"Rollback snapshot: {path.name} ({len(pinned)} pins)")
-    ctx.ui.note(f"undo this run with: pip install -r {path}")
+    ctx.ui.note(ctx.undo_hint(path))
     log(f"Rollback file written: {path}")
     prune_rollbacks(ctx)
     return path
@@ -936,8 +1114,7 @@ def run_audit(ctx: Ctx) -> tuple[bool, list[str]]:
     if ctx.args.dry_run:
         ctx.ui.note("[dry-run] would run pip-audit")
         return False, []
-    probe = run(ctx, ctx.pip_cmd("show", "pip-audit"), timeout=60)
-    if not probe.ok:
+    if importlib.util.find_spec("pip_audit") is None:
         ctx.ui.warn("pip-audit not installed — skipping. Install with: pip install pip-audit")
         return False, []
     with ctx.ui.status("Auditing for known vulnerabilities (pip-audit)",
@@ -962,7 +1139,7 @@ def export_freeze(ctx: Ctx, path: str) -> None:
         return
     with ctx.ui.status(f"Exporting pip freeze to {path}",
                        live=not ctx.args.verbose) as st:
-        res = run(ctx, ctx.pip_cmd("freeze"), timeout=300)
+        res = run(ctx, ctx.query_cmd("freeze"), timeout=300)
         if not res.ok:
             st.done(f"Export failed: {res.message}", glyph="fail", color=RED)
             return
@@ -1014,13 +1191,13 @@ def parse_selection(text: str, count: int) -> list[int] | None:
         if "-" in part:
             lo, _, hi = part.partition("-")
             lo, hi = lo.strip(), hi.strip()
-            if not (lo.isdigit() and hi.isdigit()):
+            if not (lo.isdecimal() and hi.isdecimal()):
                 return None
             lo_i, hi_i = int(lo), int(hi)
             if lo_i < 1 or hi_i > count or lo_i > hi_i:
                 return None
             indices.update(range(lo_i - 1, hi_i))
-        elif part.isdigit():
+        elif part.isdecimal():
             i = int(part)
             if i < 1 or i > count:
                 return None
@@ -1083,6 +1260,8 @@ PERMANENT_ERRORS = (
     "no matching distribution found",
     "could not find a version that satisfies",
     "externally-managed-environment",
+    "externally managed",
+    "no solution found",
     "requires a different python",
     "is not a supported wheel on this platform",
     "no such option",
@@ -1093,9 +1272,23 @@ PERMANENT_ERRORS = (
 )
 
 
+# Errors about the environment rather than any one package: nothing can install
+# here, so per-package attempts would only repeat the same failure N times.
+ENVIRONMENT_ERRORS = (
+    "externally-managed-environment",
+    "externally managed",
+    "read-only file system",
+)
+
+
 def is_permanent(error: str) -> bool:
     low = error.lower()
     return any(marker in low for marker in PERMANENT_ERRORS)
+
+
+def is_environment_error(error: str) -> bool:
+    low = error.lower()
+    return any(marker in low for marker in ENVIRONMENT_ERRORS)
 
 
 def first_error_line(text: str) -> str:
@@ -1107,8 +1300,8 @@ def first_error_line(text: str) -> str:
     return lines[-1] if lines else "unknown error"
 
 
-def batch_upgrade(ctx: Ctx, pkgs: list[Pkg]) -> bool:
-    """Try upgrading everything in one resolver run. Returns True on success.
+def batch_upgrade(ctx: Ctx, pkgs: list[Pkg]) -> tuple[bool, str]:
+    """Try upgrading everything in one resolver run. Returns (success, error).
 
     One resolver run is dramatically faster than N of them and is the only
     way the resolver can satisfy packages that constrain each other — but a
@@ -1119,7 +1312,7 @@ def batch_upgrade(ctx: Ctx, pkgs: list[Pkg]) -> bool:
     if ctx.args.dry_run:
         ctx.ui.note(f"[dry-run] {shlex.join(cmd)}")
         log(f"AUDIT: {shlex.join(cmd)} -> exit 0 (dry-run, not executed)")
-        return True
+        return True, ""
 
     tool = "uv" if ctx.use_uv_install else "pip"
     with ctx.ui.status(f"Batch upgrade of {len(names)} package(s) in one {tool} "
@@ -1128,12 +1321,13 @@ def batch_upgrade(ctx: Ctx, pkgs: list[Pkg]) -> bool:
                   stream=ctx.args.verbose)
         if res.ok:
             st.done(f"Batch upgrade succeeded ({len(names)} package(s))")
-            return True
+            return True, ""
         reason = "timed out" if res.rc == RC_TIMEOUT else first_error_line(res.message)
-        st.done(f"Batch upgrade failed ({reason}) — isolating per package",
-                glyph="warn", color=YELLOW)
+        action = ("not retrying per package" if is_environment_error(res.message)
+                  else "isolating per package")
+        st.done(f"Batch upgrade failed ({reason}) — {action}", glyph="warn", color=YELLOW)
     log(f"Batch upgrade failed: {res.message}")
-    return False
+    return False, res.message
 
 
 def upgrade_one(ctx: Ctx, pkg: Pkg) -> tuple[bool, str]:
@@ -1219,16 +1413,31 @@ class Prefetcher:
 # History
 # --------------------------------------------------------------------------
 
+def write_private(path: Path, text: str) -> None:
+    """Atomically replace `path`; mkstemp means it is 0600 from the first byte."""
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f"{path.name}.")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(text)
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
 def write_history(record: dict) -> None:
     """Append one JSON record per run, trimming the file to MAX_HISTORY records."""
     try:
         HISTORY_PATH.touch(mode=0o600, exist_ok=True)
         os.chmod(HISTORY_PATH, 0o600)
-        with open(HISTORY_PATH, "a") as fh:
+        with open(HISTORY_PATH, "a", encoding="utf-8") as fh:
             fh.write(json.dumps(record) + "\n")
-        lines = HISTORY_PATH.read_text().splitlines()
+        lines = HISTORY_PATH.read_text(encoding="utf-8", errors="replace").splitlines()
         if len(lines) > MAX_HISTORY:
-            HISTORY_PATH.write_text("\n".join(lines[-MAX_HISTORY:]) + "\n")
+            write_private(HISTORY_PATH, "\n".join(lines[-MAX_HISTORY:]) + "\n")
     except OSError as exc:
         log(f"Could not write history: {exc}")
 
@@ -1238,7 +1447,7 @@ def read_history(limit: int) -> list[dict]:
         return []
     records: list[dict] = []
     try:
-        for line in HISTORY_PATH.read_text().splitlines():
+        for line in HISTORY_PATH.read_text(encoding="utf-8", errors="replace").splitlines():
             line = line.strip()
             if not line:
                 continue
@@ -1253,6 +1462,18 @@ def read_history(limit: int) -> list[dict]:
     return records[-limit:]
 
 
+def _number(value, cast=int):
+    """History is a hand-editable file; one bad record must not stop the table."""
+    try:
+        return cast(value or 0)
+    except (TypeError, ValueError):
+        return cast(0)
+
+
+def _count(value) -> int:
+    return len(value) if isinstance(value, list) else 0
+
+
 def show_history(ui: UI, limit: int) -> int:
     records = read_history(limit)
     if not records:
@@ -1260,15 +1481,16 @@ def show_history(ui: UI, limit: int) -> int:
         return EXIT_OK
     rows = []
     for rec in records:
-        code = int(rec.get("exit_code", 0) or 0)
-        color = GREEN if code == EXIT_OK else (YELLOW if code == EXIT_FAILURES else RED)
+        code = _number(rec.get("exit_code"))
+        # Exit 3 is a --check-only answer, not an error.
+        color = {EXIT_OK: GREEN, EXIT_OUTDATED: CYAN, EXIT_FAILURES: YELLOW}.get(code, RED)
         conflicts = rec.get("new_conflicts", rec.get("conflicts", []) or [])
         rows.append([
             str(rec.get("timestamp", "?"))[:19].replace("T", " "),
-            ui.c(str(len(rec.get("upgraded", []) or [])), GREEN),
-            ui.c(str(len(rec.get("failures", []) or [])), RED if rec.get("failures") else GREY),
-            ui.c(str(len(conflicts)), YELLOW if conflicts else GREY),
-            human_time(float(rec.get("elapsed_secs", 0) or 0)),
+            ui.c(str(_count(rec.get("upgraded"))), GREEN),
+            ui.c(str(_count(rec.get("failures"))), RED if _count(rec.get("failures")) else GREY),
+            ui.c(str(_count(conflicts)), YELLOW if _count(conflicts) else GREY),
+            human_time(_number(rec.get("elapsed_secs"), float)),
             ui.c(str(code), color),
         ])
     ui.blank()
@@ -1342,7 +1564,7 @@ def build_parser() -> argparse.ArgumentParser:
                       help="Timeout per package (batch gets timeout x package count)")
 
     out = parser.add_argument_group("output")
-    out.add_argument("--color", choices=("auto", "always", "never"), default="auto",
+    out.add_argument("--color", choices=COLOR_MODES, default="auto",
                      help="Colorise output")
     out.add_argument("--ascii", action="store_true",
                      help="ASCII-only output (no box drawing or emoji)")
@@ -1381,6 +1603,21 @@ def make_ui(args: argparse.Namespace) -> UI:
     )
 
 
+def apply_cli_precedence(cli: argparse.Namespace, config: dict) -> None:
+    """Command-line flags override the config file, so a flag must not collide
+    with the opposite setting there and be reported as a usage error."""
+    if cli.no_uv:
+        config.pop("uv", None)
+    if cli.uv:
+        config.pop("no_uv", None)
+    wanted = {pat.lower() for pat in cli.only}
+    if wanted and "exclude" in config:
+        config["exclude"] = [pat for pat in config["exclude"] if pat.lower() not in wanted]
+    excluded = {pat.lower() for pat in cli.exclude}
+    if excluded and "only" in config:
+        config["only"] = [pat for pat in config["only"] if pat.lower() not in excluded]
+
+
 def validate(parser: argparse.ArgumentParser, args: argparse.Namespace) -> None:
     if args.interactive and args.yes:
         parser.error("--interactive and --yes are mutually exclusive")
@@ -1404,8 +1641,19 @@ def validate(parser: argparse.ArgumentParser, args: argparse.Namespace) -> None:
 
 
 def _raise_interrupt(signum, frame) -> None:
-    """Turn SIGTERM into the same KeyboardInterrupt path Ctrl-C already takes."""
+    """Turn a signal into the KeyboardInterrupt path, stopping children first.
+
+    They run in their own sessions, so nothing else will tell them to stop.
+    """
+    stop_children()
     raise KeyboardInterrupt
+
+
+def install_signal_handlers() -> None:
+    for sig in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
+        # An ignored signal was ignored on purpose: nohup, or `&` in a script.
+        if signal.getsignal(sig) != signal.SIG_IGN:
+            signal.signal(sig, _raise_interrupt)
 
 
 # --------------------------------------------------------------------------
@@ -1437,9 +1685,12 @@ def outdated_table(ui: UI, pkgs: list[Pkg]) -> None:
 
 def summary_panel(ui: UI, upgraded: list[str], failures: list[tuple[str, str]],
                   excluded: int, new_conflicts: list[str], elapsed: float,
-                  rollback: Path | None, tool: str, interrupted: bool) -> None:
+                  rollback: Path | None, tool: str, interrupted: bool,
+                  held_back: list[str] | None = None, dry_run: bool = False) -> None:
     if interrupted:
         title, color = "Interrupted", YELLOW
+    elif dry_run:
+        title, color = "Dry run: nothing was changed", BLUE
     elif failures:
         title, color = "Completed with failures", YELLOW
     elif new_conflicts:
@@ -1451,9 +1702,12 @@ def summary_panel(ui: UI, upgraded: list[str], failures: list[tuple[str, str]],
         return f"{ui.c(pad(label, 14), GREY)}{ui.c(value, value_color)}"
 
     lines = [
-        row("Upgraded", str(len(upgraded)), GREEN if upgraded else ""),
+        row("Would upgrade" if dry_run else "Upgraded", str(len(upgraded)),
+            GREEN if upgraded else ""),
         row("Failed", str(len(failures)), RED if failures else ""),
     ]
+    if held_back:
+        lines.append(row("Held back", str(len(held_back)), YELLOW))
     if excluded:
         lines.append(row("Excluded", str(excluded), YELLOW))
     if new_conflicts:
@@ -1471,13 +1725,19 @@ def summary_panel(ui: UI, upgraded: list[str], failures: list[tuple[str, str]],
 def build_record(ctx: Ctx, upgraded: list[str], failures: list[tuple[str, str]],
                  excluded: int, all_conflicts: list[str], new_conflicts: list[str],
                  elapsed: float, rollback: Path | None, tool: str,
-                 interrupted: bool, exit_code: int) -> dict:
+                 interrupted: bool, exit_code: int, outdated: list[Pkg] | None = None,
+                 held_back: list[str] | None = None, verified: bool = True) -> dict:
     return {
         "version": VERSION,
         "timestamp": datetime.datetime.now().isoformat(timespec="seconds"),
         "python": ctx.python,
         "installer": tool,
+        "dry_run": ctx.args.dry_run,
+        "outdated": [{"name": p.name, "version": p.version, "latest_version": p.latest}
+                     for p in outdated or []],
         "upgraded": upgraded,
+        "held_back": held_back or [],
+        "dependencies_verified": verified,
         "failures": [{"name": n, "error": e} for n, e in failures],
         "excluded": excluded,
         "conflicts": all_conflicts,
@@ -1489,13 +1749,20 @@ def build_record(ctx: Ctx, upgraded: list[str], failures: list[tuple[str, str]],
     }
 
 
+def write_json(payload) -> None:
+    try:
+        json.dump(payload, sys.stdout, indent=2)
+        sys.stdout.write("\n")
+        sys.stdout.flush()
+    except BrokenPipeError:
+        silence_stream(sys.stdout)
+
+
 def finish_reporting(ctx: Ctx, record: dict) -> None:
     if ctx.args.log_json and not ctx.args.dry_run:
         write_history(record)
     if ctx.args.summary_json:
-        json.dump(record, sys.stdout, indent=2)
-        sys.stdout.write("\n")
-        sys.stdout.flush()
+        write_json(record)
 
 
 # --------------------------------------------------------------------------
@@ -1512,6 +1779,7 @@ def main(argv: list[str] | None = None) -> int:
     if not args.no_config:
         config = load_config(ui)
         if config:
+            apply_cli_precedence(args, config)
             parser.set_defaults(**config)
             args = parser.parse_args(argv)
             ui = make_ui(args)
@@ -1535,7 +1803,7 @@ def main(argv: list[str] | None = None) -> int:
         return EXIT_FATAL
 
     # SIGTERM (launchd stopping the job) takes the same clean path as Ctrl-C.
-    signal.signal(signal.SIGTERM, _raise_interrupt)
+    install_signal_handlers()
 
     start = time.monotonic()
     log(f"--- PakMan {VERSION} run started: {shlex.join(sys.argv[1:])} ---")
@@ -1553,13 +1821,22 @@ def main(argv: list[str] | None = None) -> int:
         facts.append("dry-run")
     ui.banner(f"PakMan {VERSION}", sep.join(facts))
 
+    if not ctx.has_pip and not uv:
+        ui.error(f"Neither pip nor uv is available for {ctx.python}. "
+                 f"Install pip with: {ctx.python} -m ensurepip")
+        log("FATAL: neither pip nor uv available.")
+        return EXIT_FATAL
+    if not ctx.has_pip:
+        ui.note("this environment has no pip; using uv for everything")
     if args.uv and not uv:
         ui.warn("--uv requested but uv is not on PATH; falling back to pip.")
 
     if not check_environment(ui, args.require_venv):
         return EXIT_FATAL
 
-    with single_instance(ui, enabled=not args.no_lock and not args.dry_run) as acquired:
+    # These only read, so they need not wait for (or be refused by) a real run.
+    read_only = args.dry_run or args.check_only or args.json
+    with single_instance(ui, enabled=not args.no_lock and not read_only) as acquired:
         if not acquired:
             return EXIT_FATAL
         return run_upgrade(ctx, start)
@@ -1570,7 +1847,7 @@ def run_upgrade(ctx: Ctx, start: float) -> int:
     live = not args.verbose
     tool = "uv" if ctx.use_uv_install else "pip"
 
-    if args.upgrade_pip:
+    if args.upgrade_pip and ctx.has_pip and not (args.check_only or args.json):
         with ui.status("Upgrading pip itself", live=live) as st:
             res = run(ctx, ctx.pip_cmd("install", "--upgrade", "pip"),
                       timeout=args.timeout, stream=args.verbose, dry=True)
@@ -1584,7 +1861,7 @@ def run_upgrade(ctx: Ctx, start: float) -> int:
                 log(f"pip self-upgrade failed (non-fatal): {res.message}")
 
     # -- outdated list, with a dependency-health baseline taken alongside it --
-    baseline: list[str] = []
+    baseline: list[str] | None = []
     with ui.status("Checking for outdated packages", live=live) as st:
         with ThreadPoolExecutor(max_workers=2, thread_name_prefix="pm-query") as pool:
             fut_outdated = pool.submit(get_outdated, ctx)
@@ -1603,16 +1880,6 @@ def run_upgrade(ctx: Ctx, start: float) -> int:
     if baseline:
         ui.note(f"{len(baseline)} pre-existing dependency conflict(s) — not caused by this run")
 
-    # --json keeps its documented meaning: the outdated list, then exit.
-    if args.json:
-        json.dump([
-            {"name": p.name, "version": p.version,
-             "latest_version": p.latest, "latest_filetype": p.filetype}
-            for p in outdated
-        ], sys.stdout, indent=2)
-        sys.stdout.write("\n")
-        return EXIT_OK
-
     excluded = 0
     if args.only:
         before = len(outdated)
@@ -1626,17 +1893,28 @@ def run_upgrade(ctx: Ctx, start: float) -> int:
         if dropped:
             ui.note(f"excluded {dropped} package(s) via --exclude")
 
+    # --json keeps its documented meaning: the outdated list, then exit. Adding
+    # --check-only asks for its exit code too.
+    if args.json:
+        write_json([
+            {"name": p.name, "version": p.version,
+             "latest_version": p.latest, "latest_filetype": p.filetype}
+            for p in outdated
+        ])
+        return EXIT_OUTDATED if args.check_only and outdated else EXIT_OK
+
     if not outdated:
         elapsed = time.monotonic() - start
         ui.blank()
-        ui.panel("All packages are up to date", [
+        ui.panel("Nothing to upgrade" if excluded else "All packages are up to date", [
             f"{ui.c(pad('Excluded', 14), GREY)}{excluded}",
             f"{ui.c(pad('Elapsed', 14), GREY)}{human_time(elapsed)}",
         ], color=GREEN)
         log("Everything up to date. Run complete.")
         if args.notify:
-            send_notification("PakMan", "All packages are up to date!")
-        record = build_record(ctx, [], [], excluded, baseline, [], elapsed,
+            send_notification("PakMan", "Nothing to upgrade." if excluded
+                              else "All packages are up to date!")
+        record = build_record(ctx, [], [], excluded, baseline or [], [], elapsed,
                               None, tool, False, EXIT_OK)
         finish_reporting(ctx, record)
         return EXIT_OK
@@ -1649,6 +1927,8 @@ def run_upgrade(ctx: Ctx, start: float) -> int:
         elapsed = time.monotonic() - start
         ui.note(f"check-only: nothing was upgraded ({human_time(elapsed)})")
         log(f"Check-only run: {len(outdated)} package(s) outdated.")
+        finish_reporting(ctx, build_record(ctx, [], [], excluded, baseline or [], [], elapsed,
+                                           None, tool, False, EXIT_OUTDATED, outdated=outdated))
         return EXIT_OUTDATED
 
     # -- consent -----------------------------------------------------------
@@ -1656,6 +1936,9 @@ def run_upgrade(ctx: Ctx, start: float) -> int:
         outdated = select_packages(ui, outdated)
         if not outdated:
             ui.note("nothing selected — upgrade canceled")
+            finish_reporting(ctx, build_record(ctx, [], [], excluded, baseline or [], [],
+                                               time.monotonic() - start, None, tool, False,
+                                               EXIT_OK))
             return EXIT_OK
     elif not args.yes:
         if args.dry_run:
@@ -1663,36 +1946,62 @@ def run_upgrade(ctx: Ctx, start: float) -> int:
         elif not confirm(ui, f"\n{ui.g['bullet']} Upgrade these "
                              f"{len(outdated)} package(s)? (y/N): "):
             ui.note("upgrade canceled")
+            finish_reporting(ctx, build_record(ctx, [], [], excluded, baseline or [], [],
+                                               time.monotonic() - start, None, tool, False,
+                                               EXIT_OK, outdated=outdated))
             return EXIT_OK
 
     # -- reject suspicious names before anything reaches a subprocess ------
     failures: list[tuple[str, str]] = []
     valid: list[Pkg] = []
     for pkg in outdated:
-        if VALID_PKG.match(pkg.name):
+        if VALID_PKG.fullmatch(pkg.name):  # fullmatch: "$" would allow a trailing newline
             valid.append(pkg)
         else:
             failures.append((pkg.name, "invalid package name — skipped"))
             ui.error(f"Skipping invalid package name: {pkg.name!r}")
             log(f"SKIPPED invalid package name: {pkg.name!r}")
     if not valid:
+        finish_reporting(ctx, build_record(ctx, [], failures, excluded, baseline or [], [],
+                                           time.monotonic() - start, None, tool, False,
+                                           EXIT_FAILURES))
         return EXIT_FAILURES
 
     rollback = None if args.no_rollback else write_rollback(ctx, valid)
 
     upgraded, interrupted = perform_upgrades(ctx, valid, failures)
+    held_back: list[str] = []
+    if interrupted:
+        for name in upgraded:
+            log(f"Upgraded: {name}")
+    else:
+        upgraded, held_back = verify_upgrades(ctx, valid, upgraded)
+    for name in held_back:
+        ui.warn(f"{name} stayed at its current version: a requirement or "
+                f"constraint rules out the latest one.")
 
     # -- post-upgrade health ----------------------------------------------
     all_conflicts: list[str] = []
     new_conflicts: list[str] = []
     audited: list[str] = []
+    verified = True
     if not interrupted and not args.dry_run:
+        resolved: list[str] = []
         with ui.status("Verifying dependencies (pip check)", live=live) as st:
-            all_conflicts = pip_check(ctx)
-            new_conflicts = [line for line in all_conflicts if line not in baseline]
-            resolved = [line for line in baseline if line not in all_conflicts]
-            if not all_conflicts:
+            after = pip_check(ctx)
+            verified = after is not None
+            all_conflicts = after or []
+            if baseline is not None:
+                new_conflicts = [line for line in all_conflicts if line not in baseline]
+                resolved = [line for line in baseline if line not in all_conflicts] if verified else []
+            if not verified:
+                st.done("Could not verify dependencies: the check itself failed",
+                        glyph="warn", color=YELLOW)
+            elif not all_conflicts:
                 st.done("No broken dependencies")
+            elif baseline is None:
+                st.done(f"{len(all_conflicts)} dependency conflict(s); no baseline "
+                        f"to tell which are new", glyph="warn", color=YELLOW)
             elif not new_conflicts:
                 st.done(f"{len(all_conflicts)} pre-existing conflict(s), none new",
                         glyph="warn", color=YELLOW)
@@ -1704,7 +2013,7 @@ def run_upgrade(ctx: Ctx, start: float) -> int:
         if resolved:
             ui.ok(f"{len(resolved)} pre-existing conflict(s) resolved by this run")
         if new_conflicts and rollback is not None:
-            ui.note(f"undo with: pip install -r {rollback}")
+            ui.note(ctx.undo_hint(rollback))
         for line in new_conflicts:
             log(f"NEW CONFLICT: {line}")
 
@@ -1740,28 +2049,60 @@ def run_upgrade(ctx: Ctx, start: float) -> int:
         exit_code = EXIT_OK
 
     summary_panel(ui, upgraded, failures, excluded, new_conflicts, elapsed,
-                  rollback, tool, interrupted)
+                  rollback, tool, interrupted, held_back=held_back, dry_run=args.dry_run)
 
-    if args.notify:
-        if failures:
-            send_notification("PakMan", f"Done with {len(failures)} failure(s). Check the log.")
-        elif interrupted:
+    if args.notify and not args.dry_run:
+        if interrupted:
             send_notification("PakMan", "Run interrupted.")
+        elif failures:
+            send_notification("PakMan", f"Done with {len(failures)} failure(s). Check the log.")
         elif new_conflicts:
             send_notification("PakMan", f"{len(upgraded)} upgraded, "
                                         f"{len(new_conflicts)} new conflict(s).")
         else:
             send_notification("PakMan", f"{len(upgraded)} package(s) upgraded successfully!")
 
-    log(f"Run complete: {len(upgraded)} upgraded, {len(failures)} failed, "
-        f"{len(new_conflicts)} new conflict(s), elapsed {elapsed:.1f}s, exit {exit_code}")
+    done_word = "would upgrade" if args.dry_run else "upgraded"
+    log(f"Run complete: {len(upgraded)} {done_word}, {len(held_back)} held back, "
+        f"{len(failures)} failed, {len(new_conflicts)} new conflict(s), "
+        f"elapsed {elapsed:.1f}s, exit {exit_code}")
 
-    record = build_record(ctx, upgraded, failures, excluded, all_conflicts,
-                          new_conflicts, elapsed, rollback, tool, interrupted, exit_code)
+    record = build_record(ctx, [] if args.dry_run else upgraded, failures, excluded,
+                          all_conflicts, new_conflicts, elapsed, rollback, tool,
+                          interrupted, exit_code, outdated=valid, held_back=held_back,
+                          verified=verified)
     if audited:
         record["audit_findings"] = audited
     finish_reporting(ctx, record)
     return exit_code
+
+
+def verify_upgrades(ctx: Ctx, pkgs: list[Pkg],
+                    upgraded: list[str]) -> tuple[list[str], list[str]]:
+    """Split `upgraded` into (actually moved, held back).
+
+    pip exits 0 when the resolver decides a package has to stay where it is,
+    because of what something else requires. Only the installed version says
+    which happened. If it cannot be read, the installer's word stands.
+    """
+    if not upgraded or ctx.args.dry_run:
+        return upgraded, []
+    versions = installed_versions(ctx)
+    if versions is None:
+        log("Could not read installed versions; trusting the installer's exit code.")
+        return upgraded, []
+    by_name = {p.name: p for p in pkgs}
+    moved, held = [], []
+    for name in upgraded:
+        pkg = by_name[name]
+        now = versions.get(normalize_name(name), pkg.latest)
+        if now == pkg.version:
+            held.append(name)
+            log(f"Held back: {name} stayed at {pkg.version} (latest is {pkg.latest})")
+        else:
+            moved.append(name)
+            log(f"Upgraded: {name} {pkg.version} -> {now}")
+    return moved, held
 
 
 def perform_upgrades(ctx: Ctx, pkgs: list[Pkg],
@@ -1774,10 +2115,13 @@ def perform_upgrades(ctx: Ctx, pkgs: list[Pkg],
     ui.step("up", f"Upgrading {len(pkgs)} package(s)", BLUE)
 
     try:
-        if not args.no_batch and batch_upgrade(ctx, pkgs):
-            for pkg in pkgs:
-                log(f"Upgraded (batch): {pkg.name} {pkg.version} -> {pkg.latest}")
-            return [p.name for p in pkgs], False
+        if not args.no_batch:
+            succeeded, batch_error = batch_upgrade(ctx, pkgs)
+            if succeeded:
+                return [p.name for p in pkgs], False
+            if is_environment_error(batch_error):
+                failures.extend((p.name, first_error_line(batch_error)) for p in pkgs)
+                return upgraded, False
     except KeyboardInterrupt:
         ui.blank()
         ui.warn("Interrupted during the batch upgrade — nothing recorded as upgraded.")
@@ -1805,7 +2149,6 @@ def perform_upgrades(ctx: Ctx, pkgs: list[Pkg],
                 took = time.monotonic() - t0
                 if success:
                     upgraded.append(pkg.name)
-                    log(f"Upgraded: {pkg.name} {pkg.version} -> {pkg.latest}")
                     bar.advance(
                         f"  {ui.c(ui.g['ok'], GREEN)} {ui.c(pad(pkg.name, 28), BOLD)}"
                         f" {ui.c(pkg.version, GREY)} {ui.g['arrow']} "
@@ -1818,6 +2161,14 @@ def perform_upgrades(ctx: Ctx, pkgs: list[Pkg],
                         f"  {ui.c(ui.g['fail'], RED)} {ui.c(pad(pkg.name, 28), BOLD)}"
                         f" {ui.c(clip(error, 60), RED)}"
                     )
+                    if is_environment_error(error):
+                        rest = [p for p in pkgs if p.name != pkg.name
+                                and p.name not in upgraded
+                                and p.name not in {name for name, _ in failures}]
+                        failures.extend((p.name, error) for p in rest)
+                        ui.warn(f"Not attempting the other {len(rest)} package(s): "
+                                f"nothing can install into this environment.")
+                        break
     except KeyboardInterrupt:
         interrupted = True
         remaining = max(0, len(pkgs) - len(upgraded) - len(failures))
