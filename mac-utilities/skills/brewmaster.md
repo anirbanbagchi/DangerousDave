@@ -57,7 +57,8 @@ python3 brewmaster.py [OPTIONS]
 | `-q`, `--quiet` | `false` | Print only warnings and errors (including any failed step) |
 | `-v`, `--verbose` | `false` | Echo raw brew output instead of progress indicators; failure reasons are still captured |
 | `--json` | `false` | Print a machine-readable run summary to stdout (the UI moves to stderr) |
-| `--log-json` | `false` | Append a JSON record per run to `~/.brewmaster_history.jsonl` |
+| `--log-json` | `true` | Append a JSON record per run to `~/.brewmaster_history.jsonl` (never under `--dry-run`) |
+| `--no-log-json` | `false` | Don't record this run in the history file |
 | `--history [N]` | `15` | Show the last N recorded runs and exit |
 | `--version` | — | Print the version and exit |
 
@@ -98,8 +99,8 @@ python3 brewmaster.py --sizes
 # Upgrade formulae only, with a bundle backup first
 python3 brewmaster.py --formula-only --backup
 
-# Cron-friendly: quiet, auto-approve, JSON history
-python3 brewmaster.py -y -q --log-json
+# Cron-friendly: quiet, auto-approve (JSON history is recorded by default)
+python3 brewmaster.py -y -q
 
 # Feed the result to another tool
 python3 brewmaster.py -y --json | jq '.failures'
@@ -233,13 +234,15 @@ upgraded separately, with an explicit `--formula` or `--cask`.
 `notify`, `backup`, `jobs`, `retries`, `timeout`, `log_json`, `no_cleanup`,
 `no_prefetch`, `color`, and `ascii`. Command-line flags override it, so `--only
 foo` beats `foo` in the configured `skip` list; unknown or mistyped keys warn
-and are ignored; `--no-config` skips the file entirely.
+and are ignored; `--no-config` skips the file entirely. Run history is on by
+default, so `log_json` is only worth setting to turn it off: `"log_json": false`
+stops recording, and an explicit `--log-json` still records that one run.
 
 ```json
 {
   "skip": ["python@*", "node"],
   "jobs": 8,
-  "log_json": true
+  "notify": true
 }
 ```
 
@@ -271,13 +274,19 @@ exact shell-quoted command, its exit code, and its duration to
 `~/.brewmaster.log`. The log rotates at 2 MB, keeping 3 generations, all at
 mode 0600.
 
-With `--log-json`, each run also appends one structured record (upgraded,
-failures, skipped, elapsed, bytes downloaded, space freed, exit code) to
-`~/.brewmaster_history.jsonl`, trimmed to the newest 500 runs. `--history`
-renders those records as a table. `--json` prints the same record for the
-current run to stdout, with the human UI redirected to stderr so the two never
-mix, on every path that gets as far as a result: `--check-only` and canceled
-runs included. The record's `outdated` list holds what was selected, and
+By default each run also appends one structured record (upgraded, failures,
+skipped, elapsed, bytes downloaded, space freed, exit code) to
+`~/.brewmaster_history.jsonl` (mode 0600), trimmed to the newest 500 runs.
+Because recording is on by default, every run that reaches a result adds a
+record — `--check-only` runs and canceled runs included — so a frequent cron
+check rotates older upgrade runs out of those 500. `--dry-run` never records.
+Turn recording off for one run with `--no-log-json`, or for good with
+`"log_json": false` in `~/.brewmasterrc.json`.
+
+`--history` renders those records as a table. `--json` prints the same record
+for the current run to stdout, with the human UI redirected to stderr so the two
+never mix, on every path that gets as far as a result: `--check-only` and
+canceled runs included. The record's `outdated` list holds what was selected, and
 `dry_run` is `true` when nothing was executed, in which case `upgraded` is empty.
 
 ### Clean Interrupts and Cron Safety
@@ -297,7 +306,7 @@ the number upgraded or failed. Silently skipped off macOS.
 | Path | Purpose |
 | --- | --- |
 | `~/.brewmaster.log` | Timestamped run log with per-command AUDIT lines (mode 0600, rotates at 2 MB × 3) |
-| `~/.brewmaster_history.jsonl` | One JSON record per run when `--log-json` is set (newest 500 kept) |
+| `~/.brewmaster_history.jsonl` | One JSON record per run, on by default; off with `--no-log-json` or `"log_json": false` (mode 0600, newest 500 kept) |
 | `~/.brewmaster.lock` | Single-instance `flock` held for the duration of a run |
 | `~/.brewmasterrc.json` | Optional defaults for command-line flags |
 | `~/.brewmaster_backup_*.Brewfile` | Bundle snapshots from `--backup` (5 newest kept) |

@@ -64,7 +64,8 @@ invoke it with that virtualenv's Python: `path/to/venv/bin/python PakMan.py`.
 | `-v`, `--verbose` | `false` | Echo raw pip output instead of progress indicators; failure reasons are still captured |
 | `--json` | `false` | Output the **outdated package list** as JSON and exit, after `--only`/`--exclude` |
 | `--summary-json` | `false` | Print a machine-readable **run summary** to stdout when the run ends |
-| `--log-json` | `false` | Append a JSON record per run to `~/.pakman_history.jsonl` |
+| `--log-json` | `true` | Append a JSON record per run to `~/.pakman_history.jsonl` (on by default) |
+| `--no-log-json` | `false` | Do not record this run in the history file |
 | `--history [N]` | `15` | Show the last N recorded runs and exit |
 | `--rollbacks` | `false` | List the rollback snapshots on disk and exit |
 | `--version` | — | Print the version and exit |
@@ -119,8 +120,8 @@ python3 PakMan.py --require-venv --only-binary -y
 # Upgrade, then audit for known vulnerabilities and export a freeze
 python3 PakMan.py -y --audit --export requirements.lock
 
-# Cron-friendly: quiet, auto-approve, JSON history
-python3 PakMan.py -y -q --log-json
+# Cron-friendly: quiet, auto-approve (each run is recorded in the JSON history)
+python3 PakMan.py -y -q
 
 # Feed the outdated list to another tool
 python3 PakMan.py --json | jq -r '.[].name'
@@ -297,11 +298,16 @@ a `pip freeze` of the resulting environment.
 exact shell-quoted command, its exit code, and its duration to `~/.pakman.log`.
 The log rotates at 2 MB, keeping 3 generations, all at mode 0600.
 
-With `--log-json`, each run also appends one structured record (outdated,
+By default each run also appends one structured record (outdated,
 upgraded, held back, failures, excluded, conflicts, new conflicts, rollback path, installer, elapsed,
-exit code) to `~/.pakman_history.jsonl`, trimmed to the newest 500 runs.
-`--history` renders those records as a table. `dry_run` is `true` in the record
-when nothing was executed, in which case `upgraded` is empty.
+exit code) to `~/.pakman_history.jsonl` (mode 0600), trimmed to the newest 500 runs.
+Every run that gets past the outdated check adds one, `--check-only` included;
+`--dry-run` and `--json` never do. Turn recording off for one run
+with `--no-log-json`, or for every run with `"log_json": false` in the config
+file; `--log-json` on the command line turns it back on over that setting.
+`--history` renders those records as a table. `dry_run` is `true` in the
+`--summary-json` record when nothing was executed, in which case `upgraded` is
+empty.
 
 ### Config File
 
@@ -317,7 +323,7 @@ file entirely.
 {
   "exclude": ["boto*", "awscli"],
   "uv": true,
-  "log_json": true
+  "notify": true
 }
 ```
 
@@ -338,7 +344,7 @@ upgrades, failures, or new conflicts. Silently skipped off macOS.
 | Path | Purpose |
 | --- | --- |
 | `~/.pakman.log` | Timestamped run log with per-command AUDIT lines (mode 0600, rotates at 2 MB × 3) |
-| `~/.pakman_history.jsonl` | One JSON record per run when `--log-json` is set (newest 500 kept) |
+| `~/.pakman_history.jsonl` | One JSON record per run, on by default; off with `--no-log-json` or `"log_json": false` (mode 0600, newest 500 kept) |
 | `~/.pakman.lock` | Single-instance `flock` held for the duration of a run |
 | `~/.pakmanrc.json` | Optional defaults for command-line flags |
 | `~/.pakman_rollback_*.txt` | Version snapshots (5 newest kept); restore with `pip install -r` |

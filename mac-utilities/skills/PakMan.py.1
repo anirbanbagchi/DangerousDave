@@ -1,4 +1,4 @@
-.TH PAKMAN.PY 1 "2026-11-01" "3.1.0" "User Commands"
+.TH PAKMAN.PY 1 "2026-11-22" "3.2.0" "User Commands"
 .SH NAME
 PakMan.py \- a graphical, fast, careful Python package updater
 .SH SYNOPSIS
@@ -195,7 +195,21 @@ stderr so stdout stays parseable.
 Append one structured JSON record per run (upgraded, failures, excluded,
 conflicts, new conflicts, rollback path, installer, elapsed, exit code) to
 .IR ~/.pakman_history.jsonl .
-The file is trimmed to the newest 500 records.
+On by default. Every run that gets past the outdated check adds a record,
+.B \-\-check\-only
+included;
+.B \-\-dry\-run
+and
+.B \-\-json
+never do. The file is trimmed to the newest 500 records. Given explicitly, this
+flag overrides
+.B """log_json"": false"
+in the configuration file.
+.TP
+.B \-\-no\-log\-json
+Do not record this run in the history file. Setting
+.B """log_json"": false"
+in the configuration file does the same for every run.
 .TP
 .BI \-\-history " [N]"
 Print the last N recorded runs as a table and exit. Default is
@@ -307,7 +321,7 @@ Command-line flags override it; unknown or mistyped keys warn and are ignored.
 {
   "exclude": ["boto*", "awscli"],
   "uv": true,
-  "log_json": true
+  "notify": true
 }
 .EE
 .SH EXAMPLES
@@ -352,9 +366,9 @@ Upgrade, then audit and export a freeze:
 python3 PakMan.py -y --audit --export requirements.lock
 .EE
 .TP
-Cron-friendly run with JSON history:
+Cron-friendly quiet run (each run is recorded in the JSON history):
 .EX
-python3 PakMan.py -y -q --log-json
+python3 PakMan.py -y -q
 .EE
 .TP
 Feed the outdated list to another tool:
@@ -379,9 +393,11 @@ Timestamped log of all runs with per-command AUDIT lines. Mode 0600, rotated
 at 2 MB with 3 generations kept.
 .TP
 .I ~/.pakman_history.jsonl
-One JSON record per run when
-.B \-\-log\-json
-is set, trimmed to the newest 500. Mode 0600.
+One JSON record per run, written by default and skipped with
+.B \-\-no\-log\-json
+or
+.BR """log_json"": false" ,
+trimmed to the newest 500. Mode 0600.
 .TP
 .I ~/.pakman.lock
 Single-instance lock held for the duration of a run. Mode 0600.
