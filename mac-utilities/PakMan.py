@@ -34,7 +34,7 @@ from concurrent.futures import Future, ThreadPoolExecutor
 from contextlib import contextmanager
 from pathlib import Path
 
-VERSION = "3.1.0"
+VERSION = "3.2.0"
 
 HOME = Path.home()
 LOG_PATH = HOME / ".pakman.log"
@@ -1477,7 +1477,8 @@ def _count(value) -> int:
 def show_history(ui: UI, limit: int) -> int:
     records = read_history(limit)
     if not records:
-        ui.step("note", "No run history yet — add --log-json to record runs.", YELLOW)
+        ui.step("note", "No run history yet — runs are recorded automatically unless "
+                        "--no-log-json (or \"log_json\": false) is set.", YELLOW)
         return EXIT_OK
     rows = []
     for rec in records:
@@ -1576,8 +1577,10 @@ def build_parser() -> argparse.ArgumentParser:
                      help="Output the outdated package list as JSON and exit")
     out.add_argument("--summary-json", action="store_true",
                      help="Print a machine-readable run summary to stdout when the run ends")
-    out.add_argument("--log-json", action="store_true",
+    out.add_argument("--log-json", action="store_true", default=True,
                      help=f"Append a structured JSON record per run to {HISTORY_PATH}")
+    out.add_argument("--no-log-json", dest="log_json", action="store_false",
+                     help="Do not record this run in the history file")
     out.add_argument("--history", nargs="?", type=int, const=15, metavar="N",
                      help="Show the last N recorded runs and exit")
     out.add_argument("--rollbacks", action="store_true",

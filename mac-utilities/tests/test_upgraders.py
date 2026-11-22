@@ -38,6 +38,11 @@ def cask(name, old="1.0", new="2.0"):
     return {"name": name, "installed_versions": old, "current_version": new}
 
 
+def jsonl(path):
+    """The records in a JSONL file, or [] when there is no file."""
+    return [json.loads(line) for line in path.read_text().splitlines()] if path.exists() else []
+
+
 class Sandbox(unittest.TestCase):
     """A temporary $HOME plus a bin directory for fake executables."""
 
@@ -407,6 +412,72 @@ class TestBrewLockAndFiles(BrewCase):
         self.assertIn("rc=3", res.stdout, res.stderr)
 
 
+class TestBrewHistoryDefault(BrewCase):
+    """History is recorded unless --no-log-json or "log_json": false says not
+    to; --dry-run never records."""
+
+    def setUp(self):
+        super().setUp()
+        self.history = self.home / ".brewmaster_history.jsonl"
+        self.config = self.home / ".brewmasterrc.json"
+
+    def test_plain_run_records_one_private_entry_with_its_exit_code(self):
+        self.fake_brew(formulae=[formula("foo")])
+        res = self.brew("--check-only")
+        self.assertEqual(res.returncode, 3, res.stdout + res.stderr)
+        records = jsonl(self.history)
+        self.assertEqual(len(records), 1, "a run without --log-json recorded no history")
+        self.assertEqual(stat.S_IMODE(self.history.stat().st_mode), 0o600)
+        self.assertEqual(records[0]["exit_code"], res.returncode)
+
+    def test_no_log_json_records_nothing(self):
+        self.fake_brew(formulae=[formula("foo")])
+        res = self.brew("--check-only", "--no-log-json")
+        self.assertEqual(res.returncode, 3, res.stdout + res.stderr)
+        self.assertFalse(self.history.exists())
+
+    def test_config_log_json_false_records_nothing(self):
+        self.config.write_text(json.dumps({"log_json": False}))
+        self.fake_brew(formulae=[formula("foo")])
+        res = self.brew("--check-only")
+        self.assertEqual(res.returncode, 3, res.stdout + res.stderr)
+        self.assertFalse(self.history.exists())
+
+    def test_cli_log_json_overrides_config_false(self):
+        self.config.write_text(json.dumps({"log_json": False}))
+        self.fake_brew(formulae=[formula("foo")])
+        res = self.brew("--check-only", "--log-json")
+        self.assertEqual(res.returncode, 3, res.stdout + res.stderr)
+        self.assertEqual(len(jsonl(self.history)), 1)
+
+    def test_dry_run_never_records(self):
+        self.fake_brew(formulae=[formula("foo")])
+        for extra in ([], ["--log-json"]):
+            res = self.brew("--dry-run", "--no-cleanup", *extra)
+            self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        self.assertFalse(self.history.exists())
+
+    def test_runs_append_rather_than_overwrite(self):
+        self.fake_brew()
+        self.brew("-y", "--no-prefetch", "--no-cleanup")
+        self.fake_brew(formulae=[formula("foo")])
+        self.brew("--check-only")
+        self.assertEqual([r["exit_code"] for r in jsonl(self.history)], [0, 3])
+
+    def test_empty_history_no_longer_says_to_add_log_json(self):
+        self.fake_brew()
+        res = self.brew("--history")
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        self.assertNotIn("add --log-json", res.stdout + res.stderr)
+        self.assertIn("--no-log-json", res.stdout + res.stderr)
+        self.assertFalse(self.history.exists(), "--history recorded itself as a run")
+
+    def test_help_documents_no_log_json(self):
+        res = self.brew("--help")
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertIn("--no-log-json", res.stdout)
+
+
 class PakCase(Sandbox):
     """PakMan shells out to sys.executable, so pointing that at a shell script
     answering `-m pip ...` lets tests script pip's behaviour. The real PakMan.py
@@ -693,6 +764,73 @@ class TestPakFiles(PakCase):
         log = self.log_text(".pakman.log")
         audited = re.findall(r"AUDIT: \S+ -m pip (\w+)", log)
         self.assertEqual(sorted(audited), sorted(c.split()[0] for c in self.called()))
+
+
+class TestPakHistoryDefault(PakCase):
+    """History is recorded unless --no-log-json or "log_json": false says not
+    to; --dry-run never records."""
+
+    def setUp(self):
+        super().setUp()
+        self.history = self.home / ".pakman_history.jsonl"
+        self.config = self.home / ".pakmanrc.json"
+
+    def test_plain_run_records_one_private_entry_with_its_exit_code(self):
+        self.fake_pip([pip_pkg("foo")])
+        res = self.pak("--check-only", "--no-uv", "--ascii")
+        self.assertEqual(res.returncode, 3, res.stdout + res.stderr)
+        records = jsonl(self.history)
+        self.assertEqual(len(records), 1, "a run without --log-json recorded no history")
+        self.assertEqual(stat.S_IMODE(self.history.stat().st_mode), 0o600)
+        self.assertEqual(records[0]["exit_code"], res.returncode)
+
+    def test_no_log_json_records_nothing(self):
+        self.fake_pip([pip_pkg("foo")])
+        res = self.pak("--check-only", "--no-uv", "--ascii", "--no-log-json")
+        self.assertEqual(res.returncode, 3, res.stdout + res.stderr)
+        self.assertFalse(self.history.exists())
+
+    def test_config_log_json_false_records_nothing(self):
+        self.config.write_text(json.dumps({"log_json": False}))
+        self.fake_pip([pip_pkg("foo")])
+        res = self.pak("--check-only", "--no-uv", "--ascii")
+        self.assertEqual(res.returncode, 3, res.stdout + res.stderr)
+        self.assertFalse(self.history.exists())
+
+    def test_cli_log_json_overrides_config_false(self):
+        self.config.write_text(json.dumps({"log_json": False}))
+        self.fake_pip([pip_pkg("foo")])
+        res = self.pak("--check-only", "--no-uv", "--ascii", "--log-json")
+        self.assertEqual(res.returncode, 3, res.stdout + res.stderr)
+        self.assertEqual(len(jsonl(self.history)), 1)
+
+    def test_dry_run_never_records(self):
+        self.fake_pip([pip_pkg("foo")])
+        for extra in ([], ["--log-json"]):
+            res = self.pak("--dry-run", "--no-uv", "--ascii", *extra)
+            self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        self.assertFalse(self.history.exists())
+
+    def test_runs_append_rather_than_overwrite(self):
+        self.fake_pip()
+        self.pak("-y", "--no-uv", "--ascii", "--no-rollback")
+        self.fake_pip([pip_pkg("foo")])
+        self.pak("--check-only", "--no-uv", "--ascii")
+        self.assertEqual([r["exit_code"] for r in jsonl(self.history)], [0, 3])
+
+    def test_empty_history_no_longer_says_to_add_log_json(self):
+        self.fake_pip()
+        res = self.pak("--history", "--ascii")
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        self.assertNotIn("add --log-json", res.stdout + res.stderr)
+        self.assertIn("--no-log-json", res.stdout + res.stderr)
+        self.assertFalse(self.history.exists(), "--history recorded itself as a run")
+
+    def test_help_documents_no_log_json(self):
+        self.fake_pip()
+        res = self.pak("--help")
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertIn("--no-log-json", res.stdout)
 
 
 if __name__ == "__main__":

@@ -1,4 +1,4 @@
-.TH BREWMASTER.PY 1 "2026-11-01" "3.1.0" "User Commands"
+.TH BREWMASTER.PY 1 "2026-11-22" "3.2.0" "User Commands"
 .SH NAME
 brewmaster.py \- a graphical, fast, careful Homebrew upgrader
 .SH SYNOPSIS
@@ -191,11 +191,23 @@ Print a machine-readable JSON summary of the run to stdout, including under
 and on a canceled run; all human-readable output moves to stderr so the two
 never mix.
 .TP
-.B \-\-log\-json
+.BR \-\-log\-json " (default)"
 Append one structured JSON record per run (upgraded packages, failures,
 skipped count, elapsed time, bytes downloaded, space freed, exit code) to
 .IR ~/.brewmaster_history.jsonl .
-The file is trimmed to the newest 500 records.
+The file is trimmed to the newest 500 records. Recording is on by default, so
+every run that reaches a result adds a record,
+.B \-\-check\-only
+and canceled runs included;
+.B \-\-dry\-run
+never records. Given explicitly, this flag overrides
+.B """log_json"": false"
+in the configuration file.
+.TP
+.B \-\-no\-log\-json
+Do not record this run in the history file. Setting
+.B """log_json"": false"
+in the configuration file does the same for every run.
 .TP
 .BI \-\-history " [N]"
 Print the last N recorded runs as a table and exit. Default is
@@ -290,12 +302,17 @@ supplies defaults for any of
 .BR skip ", " only ", " greedy ", " notify ", " backup ", " jobs ", " retries ,
 .BR timeout ", " log_json ", " no_cleanup ", " no_prefetch ", " color ", and " ascii .
 Command-line flags override it; unknown or mistyped keys warn and are ignored.
+Run history is on by default, so
+.B log_json
+is only worth setting to
+.B false
+to turn it off.
 .PP
 .EX
 {
   "skip": ["python@*", "node"],
   "jobs": 8,
-  "log_json": true
+  "notify": true
 }
 .EE
 .SH EXAMPLES
@@ -335,9 +352,9 @@ Backup bundle, then upgrade formulae only:
 python3 brewmaster.py --backup --formula-only
 .EE
 .TP
-Cron-friendly run with JSON history:
+Cron-friendly quiet run (JSON history is recorded by default):
 .EX
-python3 brewmaster.py -y -q --log-json
+python3 brewmaster.py -y -q
 .EE
 .TP
 Feed the result to another tool:
@@ -361,9 +378,11 @@ Timestamped log of all runs with per-command AUDIT lines. Mode 0600, rotated
 at 2 MB with 3 generations kept.
 .TP
 .I ~/.brewmaster_history.jsonl
-One JSON record per run when
-.B \-\-log\-json
-is set, trimmed to the newest 500. Mode 0600.
+One JSON record per run, on by default; turned off by
+.B \-\-no\-log\-json
+or
+.BR """log_json"": false" .
+Trimmed to the newest 500. Mode 0600.
 .TP
 .I ~/.brewmaster.lock
 Single-instance lock held for the duration of a run. Mode 0600.
